@@ -179,6 +179,13 @@ requests and the local Virtual Host WebSocket from PR previews. The stable
 simulator keeps the local Virtual Host allowance. Browser tests exercise both
 policies.
 
+The main simulator page has an expandable **Virtual USB Connection** panel
+with pinned Specter Virtual Host downloads, setup steps, and live local bridge
+status. It opens the localhost WebSocket only when the visitor expands the
+panel (or explicitly enables `?virtual-host=1`). PR previews keep the panel
+visible but explain that the local connection is disabled there; their stricter
+CSP remains in force.
+
 Several PR previews coexist in `/pr/<N>/`. The trusted publisher serializes
 updates and keeps `.preview-state/pr/<N>.json` on its persistent `gh-pages`
 branch separately from the public preview. The state records the latest source

@@ -321,7 +321,8 @@
     html.gallery-pending::after { content: 'Loading Simulator…'; position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; color: var(--specter-light-secondary); font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; z-index: 999; }
     html.gallery-pending.gallery body { visibility: visible; }
     html.gallery-pending.gallery::after { display: none; }
-    .embedded header, .embedded .hardware-link, .embedded .demo-import, .embedded footer { display:none; }
+    .embedded header, .embedded .hardware-link, .embedded .demo-import, .embedded footer,
+    .embedded .virtual-host { display:none; }
     .embedded, .embedded body { min-height:0; }
     .embedded .page { padding:10px 12px 22px; }
     .embedded .phone-wrapper { max-width:330px; }
@@ -330,13 +331,31 @@
     .gallery .warning, .gallery .device-actions, .gallery .sim-panel, .gallery .status-card, .gallery .developer-options { display:none; }
     .gallery .phone-wrapper { width:100%; height:100%; max-width:none; }
     .gallery .phone-wrapper .phone-mockup { display:none; }
-    .virtual-host { border:1px solid #3a4d61; border-radius:10px; padding:16px; background:#182434; }
+    .virtual-host { width:100%; max-width:1120px; justify-self:center; margin:0 auto; border:1px solid #35506d; border-radius:14px; background:linear-gradient(135deg,#101b2a,#17283b); color:var(--specter-light); overflow:hidden; }
     .virtual-host[hidden] { display:none; }
-    .virtual-host h2 { margin-top:0; }
-    .virtual-host-status { display:flex; gap:24px; flex-wrap:wrap; }
-    .virtual-host-status strong { color:#8fe0a4; }
-    .virtual-host-status .waiting { color:#ffd17d; }
+    .virtual-host summary { cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:17px 20px; font-size:15px; font-weight:700; list-style:none; }
+    .virtual-host summary::-webkit-details-marker { display:none; }
+    .virtual-host summary::after { content:'+'; color:var(--specter-primary); font-size:24px; font-weight:400; line-height:1; }
+    .virtual-host[open] summary::after { content:'\2212'; }
+    .virtual-host-summary small { display:block; margin-top:4px; color:var(--specter-light-secondary); font-size:11px; font-weight:400; }
+    .virtual-host-body { border-top:1px solid #35506d; padding:18px 20px 20px; }
+    .virtual-host-intro { margin:0 0 15px; color:#d8e6f3; line-height:1.5; }
+    .virtual-host-status { display:flex; align-items:center; gap:9px; padding:10px 12px; margin:0 0 12px; border:1px solid #3b4a5e; border-radius:9px; background:#0b1624; color:var(--specter-light-secondary); font-size:12px; }
+    .virtual-host-status-dot { width:9px; height:9px; border-radius:50%; background:#6b7785; flex:none; }
+    .virtual-host-status.connected .virtual-host-status-dot { background:#45c96b; box-shadow:0 0 9px #45c977; }
+    .virtual-host-status.waiting .virtual-host-status-dot { background:#f2b84b; box-shadow:0 0 9px #f2b84b66; }
+    .virtual-host-connections { display:flex; gap:24px; flex-wrap:wrap; color:var(--specter-light-secondary); font-size:12px; }
+    .virtual-host-connections strong { color:#8fe0a4; }
+    .virtual-host-connections .waiting { color:#ffd17d; }
+    .virtual-host-actions { display:flex; flex-wrap:wrap; gap:9px; margin:14px 0; }
+    .virtual-host-download { display:inline-flex; align-items:center; justify-content:center; min-height:38px; padding:0 15px; border-radius:7px; background:var(--specter-primary); color:white; font-size:12px; font-weight:700; text-decoration:none; }
+    .virtual-host-download:hover { filter:brightness(1.12); }
+    .virtual-host-repository { margin:8px 0 0; color:var(--specter-light-secondary); font-size:12px; line-height:1.5; }
+    .virtual-host-repository a { color:#8fd2ff; }
+    .virtual-host-steps { margin:17px 0 10px; padding-left:22px; color:#d8e6f3; line-height:1.55; }
+    .virtual-host-steps li { margin:8px 0; padding-left:4px; }
     .virtual-host-settings { color:#8fd2ff; }
+    .virtual-host-note { margin:12px 0 0; color:var(--specter-light-secondary); font-size:11px; line-height:1.5; }
     .gallery .virtual-host { display:none; }
     .gallery #screen-overlay { left:0; top:0; width:100%; height:100%; border-radius:0; }
     @media (min-width:900px) {
@@ -454,15 +473,41 @@
     </div>
   </section>
 
-  <section id="virtual-host" class="virtual-host" aria-label="Virtual Host" hidden>
-    <h2>Virtual Host</h2>
-    <div class="virtual-host-status" role="status" aria-live="polite">
-      <div>Bridge: <strong id="virtual-host-bridge-status">Stopped</strong></div>
-      <div>Wallet connection: <strong id="virtual-host-wallet-status" class="waiting">Waiting</strong></div>
+  <p class="hardware-link">Everything above is a software simulation of Specter DIY hardware.</p>
+
+  <details id="virtual-host" class="virtual-host">
+    <summary>
+      <span class="virtual-host-summary">Virtual USB Connection
+        <small>Connect the simulator to Specter Desktop with Specter Virtual Host.</small>
+      </span>
+    </summary>
+    <div class="virtual-host-body">
+      <p class="virtual-host-intro">Specter Virtual Host creates a local connection between this simulator and a compatible companion app, such as Specter Desktop. It runs only on your computer and uses Specter DIY's official simulator port.</p>
+      <div id="virtual-host-status" class="virtual-host-status" role="status" aria-live="polite">
+        <span class="virtual-host-status-dot" aria-hidden="true"></span>
+        <span id="virtual-host-status-text">Virtual Host not detected</span>
+      </div>
+      <div class="virtual-host-connections" aria-label="Virtual Host connection status">
+        <div>Local bridge: <strong id="virtual-host-bridge-status">Stopped</strong></div>
+        <div>Companion app: <strong id="virtual-host-wallet-status" class="waiting">Waiting</strong></div>
+      </div>
+      <div class="virtual-host-actions">
+        <a class="virtual-host-download" href="https://github.com/cryptoadvance/specter-virtual-host/releases/download/v1.0.4/Specter-Virtual-Host-Windows-x64.exe" target="_blank" rel="noopener noreferrer">Download for Windows (.exe)</a>
+        <a class="virtual-host-download" href="https://github.com/cryptoadvance/specter-virtual-host/releases/download/v1.0.4/Specter-Virtual-Host-Linux-x64" target="_blank" rel="noopener noreferrer">Download for Linux (x64)</a>
+        <a class="virtual-host-download" href="https://github.com/cryptoadvance/specter-virtual-host/releases/download/v1.0.4/Specter-Virtual-Host-macOS-arm64" target="_blank" rel="noopener noreferrer">Download for macOS (Apple Silicon)</a>
+        <a class="virtual-host-download" href="https://github.com/cryptoadvance/specter-virtual-host/releases/download/v1.0.4/Specter-Virtual-Host-macOS-x64" target="_blank" rel="noopener noreferrer">Download for macOS (Intel)</a>
+      </div>
+      <p class="virtual-host-repository">Source code, releases and checksums: <a href="https://github.com/cryptoadvance/specter-virtual-host" target="_blank" rel="noopener noreferrer">github.com/cryptoadvance/specter-virtual-host</a></p>
+      <ol class="virtual-host-steps">
+        <li>Download and run <strong>Specter Virtual Host</strong> for your operating system. Keep its window open.</li>
+        <li>Complete the simulator's initial wallet setup with a <strong>public test seed</strong> and reach the Applications screen. An uninitialized device has no fingerprint for Specter Desktop.</li>
+        <li>Open <strong>Device settings → Communication → USB communication</strong>, enable USB, and confirm the restart.</li>
+        <li>In Specter Desktop, add or rescan hardware devices. The simulator appears as <strong>Specter DIY</strong>.</li>
+      </ol>
+      <p id="virtual-host-preview-note" class="virtual-host-note" hidden>For security, isolated pull-request previews cannot connect to local services. Use the published Web Simulator to connect to Specter Virtual Host.</p>
+      <p class="virtual-host-note">The bridge listens only on this computer; closing its window ends the connection. Use public test seeds only. <a class="virtual-host-settings" href="http://127.0.0.1:8788/settings" target="_blank" rel="noopener noreferrer">Advanced / Trusted Sites</a></p>
     </div>
-    <p>Connects this simulator to a local Specter Virtual Host. The bridge settings page is served only by your computer.</p>
-    <a class="virtual-host-settings" href="http://127.0.0.1:8788/settings" target="_blank" rel="noopener noreferrer">Advanced / Trusted Sites</a>
-  </section>
+  </details>
 
   <section class="demo-import" aria-label="Public demo data">
     <details>
@@ -517,6 +562,6 @@
 </footer>
 
 <script src="./assets/jsQR-1.4.0.js"></script>
-<script type="module" src="./browser/site.js?v=20261004-developer-inspector2"></script>
+<script type="module" src="./browser/site.js?v=20261004-virtual-host-box1"></script>
 </body>
 </html>

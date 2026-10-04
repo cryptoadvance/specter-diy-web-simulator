@@ -76,6 +76,11 @@ let inspectorPending = null;
 let inspectorBaseline = null;
 let inspectorFileRequest = 0;
 let inspectorGeneration = -1;
+const virtualHostDetails = $('#virtual-host');
+const virtualHostStatus = $('#virtual-host-status');
+const virtualHostStatusText = $('#virtual-host-status-text');
+const virtualHostPreviewNote = $('#virtual-host-preview-note');
+const isolatedPreviewRoute = /(?:^|\/)pr\/\d+\/$/.test(siteRoot.pathname);
 let virtualHostSocket;
 let virtualHostRetryTimer;
 let virtualHostClientId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -252,16 +257,41 @@ function setStatus(message, running = false) {
   status.textContent = message;
   dot.classList.toggle('on', running);
 }
-function updateVirtualHostStatus() {
+function updateVirtualHostStatus(message) {
   const bridge = $('#virtual-host-bridge-status');
   const wallet = $('#virtual-host-wallet-status');
-  if (!bridge || !wallet) return;
-  bridge.textContent = virtualHostRunning ? 'Running' : 'Stopped';
-  wallet.textContent = virtualHostWalletConnected ? 'Connected' : 'Waiting';
-  wallet.classList.toggle('waiting', !virtualHostWalletConnected);
+  if (bridge && wallet) {
+    bridge.textContent = virtualHostRunning ? 'Running' : 'Stopped';
+    wallet.textContent = virtualHostWalletConnected ? 'Connected' : 'Waiting';
+    wallet.classList.toggle('waiting', !virtualHostWalletConnected);
+  }
+  if (!virtualHostStatus || !virtualHostStatusText) return;
+  const connected = virtualHostRunning && virtualHostWalletConnected;
+  virtualHostStatus.classList.toggle('connected', connected);
+  virtualHostStatus.classList.toggle('waiting', !connected);
+  if (message) {
+    virtualHostStatusText.textContent = message;
+  } else if (isolatedPreviewRoute) {
+    virtualHostStatusText.textContent = 'Local Virtual Host connections are disabled on isolated pull-request previews.';
+  } else if (!virtualHostRunning) {
+    virtualHostStatusText.textContent = 'Virtual Host not detected — run it on this computer to connect.';
+  } else if (!virtualHostWalletConnected) {
+    virtualHostStatusText.textContent = 'Virtual Host is running — waiting for Specter Desktop.';
+  } else {
+    virtualHostStatusText.textContent = 'Connected to Specter Desktop.';
+  }
+}
+function scheduleVirtualHostRetry() {
+  clearTimeout(virtualHostRetryTimer);
+  if (isolatedPreviewRoute || (!virtualHostDetails?.open && params.get('virtual-host') !== '1')) return;
+  virtualHostRetryTimer = setTimeout(connectVirtualHost, 2000);
 }
 function connectVirtualHost() {
-  if (!$('#virtual-host') || params.get('virtual-host') !== '1' ||
+  if (isolatedPreviewRoute) {
+    updateVirtualHostStatus();
+    return;
+  }
+  if (!virtualHostDetails || (params.get('virtual-host') !== '1' && !virtualHostDetails.open) ||
       virtualHostSocket?.readyState === WebSocket.OPEN || virtualHostSocket?.readyState === WebSocket.CONNECTING) return;
   const query = `?client=${encodeURIComponent(virtualHostClientId)}`;
   const localPage = location.hostname === '127.0.0.1' && location.port === '8788';
@@ -269,9 +299,8 @@ function connectVirtualHost() {
   try {
     socket = new WebSocket(`${localPage ? `ws://${location.host}` : 'ws://127.0.0.1:8788'}/bridge${query}`);
   } catch (error) {
-    log(`Virtual Host unavailable: ${error.message}`);
-    clearTimeout(virtualHostRetryTimer);
-    virtualHostRetryTimer = setTimeout(connectVirtualHost, 2000);
+    updateVirtualHostStatus(`Virtual Host unavailable: ${error.message}`);
+    scheduleVirtualHostRetry();
     return;
   }
   virtualHostSocket = socket;
@@ -302,10 +331,7 @@ function connectVirtualHost() {
     virtualHostRunning = false;
     virtualHostWalletConnected = false;
     updateVirtualHostStatus();
-    if (event.code !== 4001 && params.get('virtual-host') === '1') {
-      clearTimeout(virtualHostRetryTimer);
-      virtualHostRetryTimer = setTimeout(connectVirtualHost, 2000);
-    }
+    if (event.code !== 4001) scheduleVirtualHostRetry();
   };
   socket.onerror = () => { /* onclose updates the status and schedules a retry */ };
 }
@@ -314,6 +340,14 @@ addEventListener('specter-virtual-host-send', event => {
   const bytes = event.detail;
   if (bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes)) virtualHostSocket.send(bytes);
 });
+if (virtualHostDetails) {
+  virtualHostDetails.addEventListener('toggle', () => {
+    if (virtualHostDetails.open) connectVirtualHost();
+    else if (params.get('virtual-host') !== '1') clearTimeout(virtualHostRetryTimer);
+  });
+  if (virtualHostPreviewNote) virtualHostPreviewNote.hidden = !isolatedPreviewRoute;
+  updateVirtualHostStatus();
+}
 function clearStartupTimer() {
   if (startupTimer !== undefined) clearTimeout(startupTimer);
   startupTimer = undefined;
@@ -1191,7 +1225,7 @@ function updateBuildMetadata(manifest) {
 
 try {
   if (params.get('virtual-host') === '1' && !embedded && !gallery) {
-    $('#virtual-host').hidden = false;
+    virtualHostDetails.open = true;
     connectVirtualHost();
   }
   stateFiles = await awaitPeripherals();
