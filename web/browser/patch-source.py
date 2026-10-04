@@ -61,7 +61,24 @@ mouse_source = mouse_file.read_text()
 mouse_anchor = "/**\n * It will be called from the main SDL thread\n */"
 mouse_bridge = """#ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#include "py/runtime.h"
+#include "py/obj.h"
+STATIC mp_obj_t browser_inspector_apply_enabled(mp_obj_t enabled) {
+    mp_obj_t modules = MP_OBJ_FROM_PTR(&MP_STATE_VM(mp_loaded_modules_dict));
+    mp_obj_t module = mp_obj_dict_get(modules, MP_OBJ_NEW_QSTR(MP_QSTR_browser_inspector));
+    mp_obj_t set_enabled = mp_load_attr(module, MP_QSTR_set_enabled);
+    return mp_call_function_1(set_enabled, enabled);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(browser_inspector_apply_enabled_obj, browser_inspector_apply_enabled);
+STATIC void browser_inspector_schedule(int enabled) {
+    (void)mp_sched_schedule(MP_OBJ_FROM_PTR(&browser_inspector_apply_enabled_obj), MP_OBJ_NEW_SMALL_INT(enabled));
+}
 EMSCRIPTEN_KEEPALIVE void browser_pointer(int x, int y, int down) {
+    // Reuse the existing export so trusted Emscripten glue needs no new ABI.
+    if (x == -1 && down == -1 && (y == 0 || y == 1)) {
+        browser_inspector_schedule(y);
+        return;
+    }
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     if (x >= MONITOR_HOR_RES) x = MONITOR_HOR_RES - 1;
@@ -85,6 +102,8 @@ if mouse_bridge not in mouse_source:
     if mouse_anchor not in mouse_source:
         raise RuntimeError(f"Unexpected mouse source at {mouse_file}")
     mouse_file.write_text(mouse_source.replace(mouse_anchor, mouse_bridge + mouse_anchor, 1))
+elif 'browser_inspector_schedule(y);' not in mouse_source:
+    raise RuntimeError(f"Unexpected browser pointer bridge at {mouse_file}")
 
 # Safari/WebKit currently has no OffscreenCanvas in some releases. Keep the
 # same LVGL framebuffer and worker execution, but stream dirty pixels to the

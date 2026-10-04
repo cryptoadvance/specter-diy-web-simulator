@@ -10,8 +10,67 @@ const requests = [];
 const errors = [];
 page.on('request', request => requests.push(request.url()));
 page.on('pageerror', error => errors.push(error.message));
+await page.addInitScript(() => {
+  window.inspectorMessages = [];
+  const NativeWorker = window.Worker;
+  window.Worker = class extends NativeWorker {
+    postMessage(message, transfer) {
+      if (typeof message?.type === 'string' && message.type.startsWith('inspector-')) {
+        window.inspectorMessages.push({ type: message.type, enabled: message.enabled });
+      }
+      return super.postMessage(message, transfer);
+    }
+  };
+});
 await page.goto(base, { waitUntil: 'domcontentloaded' });
-await page.locator('#st').getByText('Running locally').waitFor({ timeout: 45000 });
+try { await page.locator('#st').getByText('Running locally').waitFor({ timeout: 45000 }); }
+catch (error) {
+  console.error(JSON.stringify({ status: await page.locator('#st').textContent(),
+    debug: await page.locator('#debug-log').textContent(), errors,
+    requests: requests.filter(url => /current\.json|build-info|micropython|browser\.js/.test(url)) }, null, 2));
+  throw error;
+}
+if (await page.locator('#advanced-options').isChecked() || await page.locator('#developer-inspector').isVisible()) {
+  throw new Error('Developer Options must be off by default');
+}
+await page.waitForTimeout(300);
+if (await page.evaluate(() => window.inspectorMessages.length)) {
+  throw new Error('The normal firmware boot must not start the Developer Options inspector');
+}
+await page.locator('#advanced-options').check();
+await page.waitForFunction(() => {
+  const text = document.querySelector('#inspector-state').textContent;
+  try { return Boolean(JSON.parse(text).firmware?.keystoreObjects); } catch { return false; }
+}, null, { timeout: 20000 });
+const keystoreObjects = JSON.parse(await page.locator('#inspector-objects').textContent());
+for (const name of ['keystore.mnemonic', 'keystore.root', 'keystore.enc_secret', 'bip39_seed']) {
+  if (!(name in keystoreObjects)) throw new Error(`Runtime RAM inspection omitted ${name}`);
+}
+await page.locator('#inspector-baseline').click();
+await page.locator('#inspector-changes').getByText('Baseline captured').waitFor();
+const capturedBaseline = await page.locator('#inspector-changes').textContent();
+await page.locator('#inspector-compare').click();
+await page.waitForFunction(previous => document.querySelector('#inspector-changes').textContent !== previous,
+  capturedBaseline);
+const firmwareComparison = await page.locator('#inspector-changes').textContent();
+if (/requestId/i.test(firmwareComparison)) {
+  throw new Error(`A per-request firmware ID must not appear as a baseline change: ${firmwareComparison}`);
+}
+if (!await page.evaluate(() => window.inspectorMessages.some(message =>
+  message.type === 'inspector-enable' && message.enabled === true))) {
+  throw new Error('Enabling Developer Options did not activate the live firmware inspector');
+}
+if (await page.locator('#inspector-sensitive-values').isVisible()) {
+  throw new Error('Sensitive keystore values must stay hidden until explicitly requested');
+}
+await page.locator('#advanced-options').uncheck();
+if (await page.locator('#inspector-state').textContent() || await page.locator('#inspector-objects').textContent()) {
+  throw new Error('Disabling Developer Options did not clear inspector output');
+}
+if (!await page.evaluate(() => window.inspectorMessages.some(message =>
+  message.type === 'inspector-enable' && message.enabled === false))) {
+  throw new Error('Disabling Developer Options did not stop the live firmware inspector');
+}
 if (!await page.locator('.phone-mockup').evaluate(img => img.complete && img.naturalWidth > 0)) {
   throw new Error('Specter Shield Metal device image did not load');
 }
@@ -57,11 +116,15 @@ if (!(await readFile(await download.path())).equals(Buffer.from([0, 1, 2, 255]))
 }
 
 const previousCanvas = await canvas.elementHandle();
+const beforeRestartMessages = await page.evaluate(() => window.inspectorMessages.length);
 await page.locator('#restart-btn').click();
 await page.waitForFunction(previous => document.querySelector('#screen') !== previous,
   previousCanvas, { timeout: 10000 });
 await page.locator('#st').getByText('Running locally').waitFor({ timeout: 45000 });
 await previousCanvas.dispose();
+if (await page.evaluate(count => window.inspectorMessages.slice(count).length, beforeRestartMessages)) {
+  throw new Error('A normal simulator restart must not reactivate Developer Options');
+}
 await page.locator('#sd-state').getByText('Inserted').waitFor();
 await page.locator('#sd-files').getByText('probe.bin', { exact: false }).waitFor();
 await canvas.screenshot({ path: 'test-results/specter-after-restart.png' });
