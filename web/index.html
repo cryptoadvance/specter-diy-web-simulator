@@ -353,7 +353,6 @@
     .virtual-host-repository a { color:#8fd2ff; }
     .virtual-host-steps { margin:17px 0 10px; padding-left:22px; color:#d8e6f3; line-height:1.55; }
     .virtual-host-steps li { margin:8px 0; padding-left:4px; }
-    .virtual-host-settings { color:#8fd2ff; }
     .virtual-host-note { margin:12px 0 0; color:var(--specter-light-secondary); font-size:11px; line-height:1.5; }
     .gallery .virtual-host { display:none; }
     .gallery #screen-overlay { left:0; top:0; width:100%; height:100%; border-radius:0; }
@@ -496,12 +495,12 @@
       <p class="virtual-host-repository">The link always opens the latest published release. Choose the installer for your operating system and find signed checksums on the <a href="https://github.com/cryptoadvance/specter-virtual-host/releases/latest" target="_blank" rel="noopener noreferrer">latest release page</a>.</p>
       <ol class="virtual-host-steps">
         <li>Download and run <strong>Specter Virtual Host</strong> for your operating system. Keep its window open.</li>
-        <li>Complete the simulator's initial wallet setup with a <strong>public test seed</strong> and reach the Applications screen. An uninitialized device has no fingerprint for Specter Desktop.</li>
+        <li>Complete the simulator's initial wallet setup and reach the Applications screen. An uninitialized device has no fingerprint for Specter Desktop.</li>
         <li>Open <strong>Device settings → Communication → USB communication</strong>, enable USB, and confirm the restart.</li>
         <li>In Specter Desktop, add or rescan hardware devices. The simulator appears as <strong>Specter DIY</strong>.</li>
       </ol>
       <p id="virtual-host-preview-note" class="virtual-host-note" hidden>For security, isolated pull-request previews cannot connect to local services. Use the published Web Simulator to connect to Specter Virtual Host.</p>
-      <p class="virtual-host-note">The bridge listens only on this computer; closing its window ends the connection. Use public test seeds only. <a class="virtual-host-settings" href="http://127.0.0.1:8788/settings" target="_blank" rel="noopener noreferrer">Advanced / Trusted Sites</a></p>
+      <p class="virtual-host-note">The bridge listens only on this computer; closing its window ends the connection.</p>
     </div>
   </details>
 
@@ -516,7 +515,7 @@
     <label><input type="checkbox" id="advanced-options" aria-controls="developer-inspector"> Developer Options</label>
     <div id="developer-inspector" hidden>
       <h2>Developer Inspector</h2>
-      <p>Live browser simulator memory and firmware state; this is not STM32 hardware RAM. Data stays in this tab. Use public test seeds only.</p>
+      <p>Live browser simulator memory and firmware state; this is not STM32 hardware RAM. Data stays in this tab.</p>
       <div class="inspector-actions"><button id="inspector-refresh" type="button">Refresh</button><button id="inspector-baseline" type="button">Take baseline</button><button id="inspector-compare" type="button">Compare to baseline</button></div>
       <p id="inspector-status" role="status">Waiting for firmware…</p>
       <h3>RAM &amp; firmware state</h3><pre id="inspector-state">Enable Developer Options to inspect the running simulator.</pre>
