@@ -10,10 +10,26 @@ const requests = [];
 const errors = [];
 page.on('request', request => requests.push(request.url()));
 page.on('pageerror', error => errors.push(error.message));
+await page.addInitScript(() => {
+  window.inspectorMessages = [];
+  const NativeWorker = window.Worker;
+  window.Worker = class extends NativeWorker {
+    postMessage(message, transfer) {
+      if (typeof message?.type === 'string' && message.type.startsWith('inspector-')) {
+        window.inspectorMessages.push({ type: message.type, enabled: message.enabled });
+      }
+      return super.postMessage(message, transfer);
+    }
+  };
+});
 await page.goto(base, { waitUntil: 'domcontentloaded' });
 await page.locator('#st').getByText('Running locally').waitFor({ timeout: 45000 });
 if (await page.locator('#advanced-options').isChecked() || await page.locator('#developer-inspector').isVisible()) {
   throw new Error('Developer Options must be off by default');
+}
+await page.waitForTimeout(300);
+if (await page.evaluate(() => window.inspectorMessages.length)) {
+  throw new Error('The normal firmware boot must not start the Developer Options inspector');
 }
 await page.locator('#advanced-options').check();
 await page.waitForFunction(() => {
@@ -24,12 +40,20 @@ const keystoreObjects = JSON.parse(await page.locator('#inspector-objects').text
 for (const name of ['keystore.mnemonic', 'keystore.root', 'keystore.enc_secret', 'bip39_seed']) {
   if (!(name in keystoreObjects)) throw new Error(`Runtime RAM inspection omitted ${name}`);
 }
+if (!await page.evaluate(() => window.inspectorMessages.some(message =>
+  message.type === 'inspector-enable' && message.enabled === true))) {
+  throw new Error('Enabling Developer Options did not activate the live firmware inspector');
+}
 if (await page.locator('#inspector-sensitive-values').isVisible()) {
   throw new Error('Sensitive keystore values must stay hidden until explicitly requested');
 }
 await page.locator('#advanced-options').uncheck();
 if (await page.locator('#inspector-state').textContent() || await page.locator('#inspector-objects').textContent()) {
   throw new Error('Disabling Developer Options did not clear inspector output');
+}
+if (!await page.evaluate(() => window.inspectorMessages.some(message =>
+  message.type === 'inspector-enable' && message.enabled === false))) {
+  throw new Error('Disabling Developer Options did not stop the live firmware inspector');
 }
 if (!await page.locator('.phone-mockup').evaluate(img => img.complete && img.naturalWidth > 0)) {
   throw new Error('Specter Shield Metal device image did not load');
@@ -76,19 +100,77 @@ if (!(await readFile(await download.path())).equals(Buffer.from([0, 1, 2, 255]))
 }
 
 const previousCanvas = await canvas.elementHandle();
+const beforeRestartMessages = await page.evaluate(() => window.inspectorMessages.length);
 await page.locator('#restart-btn').click();
 await page.waitForFunction(previous => document.querySelector('#screen') !== previous,
   previousCanvas, { timeout: 10000 });
 await page.locator('#st').getByText('Running locally').waitFor({ timeout: 45000 });
 await previousCanvas.dispose();
+if (await page.evaluate(count => window.inspectorMessages.slice(count).length, beforeRestartMessages)) {
+  throw new Error('A normal simulator restart must not reactivate Developer Options');
+}
 await page.locator('#sd-state').getByText('Inserted').waitFor();
 await page.locator('#sd-files').getByText('probe.bin', { exact: false }).waitFor();
 await canvas.screenshot({ path: 'test-results/specter-after-restart.png' });
-await page.locator('#demo-load').click();
-await page.locator('#demo-load').getByText('Import Demo Data Again', { exact: true }).waitFor({ timeout: 30000 });
+await page.locator('#sd-toggle').click();
+await page.locator('#sd-state').getByText('Ejected').waitFor();
+const actionOrder = await page.locator('#sd-add, #sd-clear, #demo-network').evaluateAll(elements =>
+  elements.map(element => ({ id: element.id, rect: element.getBoundingClientRect().toJSON() })));
+if (actionOrder.map(item => item.id).join('|') !== 'sd-add|sd-clear|demo-network' ||
+    actionOrder.some(item => Math.abs(item.rect.y - actionOrder[0].rect.y) > 2)) {
+  throw new Error('Demo selector is not alongside Add files and Clear card');
+}
+await page.evaluate(() => {
+  window.__demoCardInsertMessages = [];
+  const postMessage = Worker.prototype.postMessage;
+  Worker.prototype.postMessage = function (message, transfer) {
+    if (message?.type === 'card-insert') window.__demoCardInsertMessages.push(message.slot);
+    return postMessage.call(this, message, transfer);
+  };
+});
+await page.locator('#demo-network').selectOption('testnet');
+await page.locator('#demo-network:not(:disabled)').waitFor({ timeout: 30000 });
+await page.locator('#sd-state').getByText('Inserted').waitFor();
 await page.locator('#sd-files').getByText('testnet-multisig-unsigned.psbt', { exact: false }).waitFor();
-await page.locator('#card-slots > div').first().getByText('Inserted', { exact: true }).waitFor();
+if (await page.locator('#card-slots > div').first().locator('.card-status').isVisible()) {
+  throw new Error('Selecting Testnet automatically inserted a Smartcard');
+}
 await page.locator('#card-slots > div').first().getByText('ghost-seed', { exact: false }).waitFor();
+await page.locator('#demo-network').selectOption('mainnet');
+await page.locator('#demo-network:not(:disabled)').waitFor({ timeout: 30000 });
+await page.locator('#sd-files').getByText('mainnet-ghost-payment-high-fee.psbt', { exact: false }).waitFor();
+await page.locator('#sd-files').getByText('mainnet-ghost-wallet.json', { exact: false }).waitFor();
+if (await page.locator('#sd-files').getByText('testnet-ghost-payment-high-fee.psbt', { exact: false }).count()) {
+  throw new Error('Switching to Mainnet kept stale Testnet transactions');
+}
+if (await page.locator('#demo-network').evaluate(select => select.title).then(title => !title.includes('Never send or store real funds'))) {
+  throw new Error('Mainnet demo safety tooltip is missing');
+}
+await page.locator('#demo-network').selectOption('');
+await page.locator('#demo-network:not(:disabled)').waitFor({ timeout: 30000 });
+for (const name of ['01-ghost-PUBLIC-MAINNET-DEMO-SEED.txt', 'mainnet-ghost-payment-high-fee.psbt',
+  'testnet-multisig-unsigned.psbt']) {
+  if (await page.locator('#sd-files').getByText(name, { exact: false }).count()) {
+    throw new Error(`Selecting None kept demo file ${name}`);
+  }
+}
+if (!await page.locator('#sd-files').getByText('probe.bin', { exact: false }).count()) {
+  throw new Error('Selecting None removed unrelated SD data');
+}
+if (await page.locator('#sd-toggle').getAttribute('aria-pressed') !== 'false') {
+  throw new Error('Selecting None did not restore the SD card ejected state');
+}
+if (await page.locator('#card-slots .card-details').count()) {
+  throw new Error('Selecting None kept demo Smartcard seeds');
+}
+for (let slot = 0; slot < 2; slot++) {
+  const label = await page.locator('#card-slots > div').nth(slot).locator('.smartcard-graphic')
+    .getAttribute('aria-label');
+  if (!label?.includes('Not inserted')) throw new Error(`Selecting None left Smartcard ${slot + 1} inserted`);
+}
+if (await page.evaluate(() => window.__demoCardInsertMessages.length)) {
+  throw new Error('Demo selection automatically inserted a Smartcard');
+}
 if (await page.locator('.smartcard-photo').count() !== 3 ||
     !await page.locator('.smartcard-photo').first().evaluate(img => img.complete && img.naturalWidth > 0)) {
   throw new Error('Smartcard artwork did not load');
@@ -156,7 +238,7 @@ await mobile.close();
 if (await page.locator('img[alt="ClavaStack"]').count() ||
     (await page.title()).includes('ClavaStack') ||
     !await page.locator('a[href="https://github.com/cryptoadvance/specter-diy"]').count() ||
-    !await page.locator('a[href="https://github.com/cryptoadvance/specter-virtual-host/releases/latest"]').count()) {
+    !await page.locator('a.virtual-host-settings[href="http://127.0.0.1:8788/settings"]').count()) {
   throw new Error('Fork page branding or source link is incorrect');
 }
 console.log(JSON.stringify({ result: 'pass', canvasColors: colors.size,

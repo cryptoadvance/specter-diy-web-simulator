@@ -10,6 +10,8 @@ import sys
 kind = sys.argv[1]
 repository = os.environ["SPECTER_SOURCE_REPOSITORY"]
 expected = os.environ["EXPECTED_SHA"]
+simulator_repository = os.environ["SIMULATOR_REPOSITORY"]
+simulator_commit = os.environ["SIMULATOR_COMMIT"]
 actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 if actual != expected:
     raise SystemExit(f"Checkout {actual} does not match expected {expected}")
@@ -25,5 +27,7 @@ for path in files:
         raise SystemExit(f"Missing artifact {path}")
     hashes[str(path)] = sha256(path.read_bytes()).hexdigest()
 Path("source.json").write_text(json.dumps({
-    "kind": kind, "commit": actual, "repository": repository, "sha256": hashes,
+    "kind": kind, "commit": actual, "repository": repository,
+    "simulator": {"repository": simulator_repository, "commit": simulator_commit},
+    "sha256": hashes,
 }, indent=2) + "\n")

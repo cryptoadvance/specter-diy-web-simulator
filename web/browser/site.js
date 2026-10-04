@@ -1,3 +1,5 @@
+import { validateBuildProvenance } from './build-provenance.js';
+
 const $ = selector => document.querySelector(selector);
 const siteRoot = new URL('../', import.meta.url);
 const params = new URLSearchParams(location.search);
@@ -5,7 +7,7 @@ const embedded = params.get('embedded') === '1' && window.parent !== window;
 const gallery = embedded && params.get('gallery') === '1';
 const variant = ['diy', 'play', 'schnuartz'].includes(params.get('variant')) ? params.get('variant') : 'diy';
 const diagnosticQrProbe = params.get('probe') === 'qr' &&
-  ['127.0.0.1', 'localhost', 'try.clavastack.com', 'cryptoadvance.github.io'].includes(location.hostname);
+  ['127.0.0.1', 'localhost', 'try.clavastack.com'].includes(location.hostname);
 if (embedded) document.documentElement.classList.add('embedded');
 if (gallery) document.documentElement.classList.add('gallery');
 const notifyParent = message => { if (embedded) parent.postMessage(message, location.origin); };
@@ -30,6 +32,7 @@ const cameraSelect = $('#camera-select');
 const cameraToggle = $('#camera-toggle');
 const cameraStatusDot = $('#camera-status-dot');
 let worker;
+let workerBlobUrl;
 let softwareContext;
 let softwareFrame;
 let build;
@@ -43,6 +46,10 @@ let sdFileSizes = new Map();
 let activeCard = null;
 let cardSlots = [];
 const demoCardMetadata = new Map();
+const demoCardPriorState = new Map();
+let demoInsertedSd = false;
+let demoPreviousActiveCard = null;
+let demoSessionActive = false;
 let cameraStream;
 let cameraLoop;
 let scannerActive = false;
@@ -58,7 +65,7 @@ let forceCanvasBridge = false;
 let recoveryTimer;
 let startupPhase = 'manifest';
 let displayMode = 'unselected';
-const workerRevision = '2026-10-03.developer-inspector1';
+const workerRevision = '2026-10-04.developer-inspector2';
 let runGeneration = 0;
 let restartPromise;
 let startupStartedAt;
@@ -69,6 +76,11 @@ let inspectorPending = null;
 let inspectorBaseline = null;
 let inspectorFileRequest = 0;
 let inspectorGeneration = -1;
+let virtualHostSocket;
+let virtualHostRetryTimer;
+let virtualHostClientId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+let virtualHostRunning = false;
+let virtualHostWalletConnected = false;
 
 const startupTimeoutMs = 60000;
 
@@ -109,7 +121,8 @@ function hexDump(bytes, address = 0) {
   return lines.join('\n');
 }
 function comparableState(data) {
-  return { firmware: data.firmware, scannerActive: data.scannerActive,
+  const { requestId: ignoredFirmwareRequestId, ...firmware } = data.firmware || {};
+  return { firmware, scannerActive: data.scannerActive,
     sdInserted: data.sdInserted, cardSlot: data.cardSlot };
 }
 function receiveInspection(data) {
@@ -239,6 +252,68 @@ function setStatus(message, running = false) {
   status.textContent = message;
   dot.classList.toggle('on', running);
 }
+function updateVirtualHostStatus() {
+  const bridge = $('#virtual-host-bridge-status');
+  const wallet = $('#virtual-host-wallet-status');
+  if (!bridge || !wallet) return;
+  bridge.textContent = virtualHostRunning ? 'Running' : 'Stopped';
+  wallet.textContent = virtualHostWalletConnected ? 'Connected' : 'Waiting';
+  wallet.classList.toggle('waiting', !virtualHostWalletConnected);
+}
+function connectVirtualHost() {
+  if (!$('#virtual-host') || params.get('virtual-host') !== '1' ||
+      virtualHostSocket?.readyState === WebSocket.OPEN || virtualHostSocket?.readyState === WebSocket.CONNECTING) return;
+  const query = `?client=${encodeURIComponent(virtualHostClientId)}`;
+  const localPage = location.hostname === '127.0.0.1' && location.port === '8788';
+  let socket;
+  try {
+    socket = new WebSocket(`${localPage ? `ws://${location.host}` : 'ws://127.0.0.1:8788'}/bridge${query}`);
+  } catch (error) {
+    log(`Virtual Host unavailable: ${error.message}`);
+    clearTimeout(virtualHostRetryTimer);
+    virtualHostRetryTimer = setTimeout(connectVirtualHost, 2000);
+    return;
+  }
+  virtualHostSocket = socket;
+  socket.binaryType = 'arraybuffer';
+  socket.onopen = () => {
+    virtualHostRunning = true;
+    updateVirtualHostStatus();
+  };
+  socket.onmessage = event => {
+    if (typeof event.data === 'string') {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'hello') virtualHostWalletConnected = Boolean(message.hostConnected);
+        if (message.type === 'host') virtualHostWalletConnected = Boolean(message.connected);
+        updateVirtualHostStatus();
+      } catch (error) {
+        log(`Virtual Host status error: ${error.message}`);
+      }
+      return;
+    }
+    const bytes = new Uint8Array(event.data);
+    const testFrame = bytes.slice();
+    send({ type: 'usb-data', bytes }, [bytes.buffer]);
+    dispatchEvent(new CustomEvent('specter-virtual-host-frame', { detail: testFrame }));
+  };
+  socket.onclose = event => {
+    if (virtualHostSocket === socket) virtualHostSocket = undefined;
+    virtualHostRunning = false;
+    virtualHostWalletConnected = false;
+    updateVirtualHostStatus();
+    if (event.code !== 4001 && params.get('virtual-host') === '1') {
+      clearTimeout(virtualHostRetryTimer);
+      virtualHostRetryTimer = setTimeout(connectVirtualHost, 2000);
+    }
+  };
+  socket.onerror = () => { /* onclose updates the status and schedules a retry */ };
+}
+addEventListener('specter-virtual-host-send', event => {
+  if (virtualHostSocket?.readyState !== WebSocket.OPEN) return;
+  const bytes = event.detail;
+  if (bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes)) virtualHostSocket.send(bytes);
+});
 function clearStartupTimer() {
   if (startupTimer !== undefined) clearTimeout(startupTimer);
   startupTimer = undefined;
@@ -316,6 +391,8 @@ function crashRecover(message, generation = runGeneration) {
   screenCamera.hidden = true;
   worker?.terminate();
   worker = undefined;
+  if (workerBlobUrl) URL.revokeObjectURL(workerBlobUrl);
+  workerBlobUrl = undefined;
   // Invalidate callbacks immediately, including duplicate error/abort events.
   const recoveryGeneration = ++runGeneration;
   if (program === 'wallet' && displayMode === 'OffscreenCanvas' && !forceCanvasBridge) {
@@ -463,60 +540,126 @@ function renderCards(slots) {
   }
 }
 async function importDemoData() {
-  const button = $('#demo-load');
+  const networkSelect = $('#demo-network');
+  const network = networkSelect.value;
   if (demoImportBusy) return;
   if (startupPhase !== 'running' || !worker) {
-    log('Demo import requested before Specter finished starting.');
+    log('Demo data selection changed before Specter finished starting.');
     return;
   }
   demoImportBusy = true;
-  button.disabled = true;
+  networkSelect.disabled = true;
   try {
     const demoUrl = new URL('browser/demo-data.js', siteRoot);
-    demoUrl.searchParams.set('v', '20260916-multisig-psbt');
+    demoUrl.searchParams.set('v', '20260930-mainnet-bip84-psbt-v3');
     const { createDemoFiles } = await import(demoUrl.href);
-    const demo = createDemoFiles();
-    let projected = sdUsedBytes;
+    if (!network) {
+      if (!demoSessionActive) return;
+      const demoFileNames = new Set([
+        ...createDemoFiles('testnet').files,
+        ...createDemoFiles('mainnet').files,
+      ].map(file => file.name).concat([
+        'mainnet-multisig-unsigned.psbt',
+        'mainnet-ghost-zoo-mirror-2of3.json',
+      ]));
+      stateFiles = await snapshot();
+      for (const file of stateFiles) {
+        if (file.path.startsWith('sd/') && demoFileNames.has(file.path.slice(3))) {
+          send({ type: 'sd-delete', name: file.path.slice(3) });
+        }
+      }
+      for (const [slot, files] of demoCardPriorState) {
+        send({ type: 'state-remove-prefix', prefix: `cards/${slot}/` });
+        if (files.length) send({ type: 'state-import', files });
+      }
+      demoCardPriorState.clear();
+      demoCardMetadata.clear();
+      renderCards(cardSlots);
+      if (activeCard !== demoPreviousActiveCard) {
+        if (activeCard !== null) send({ type: 'card-remove' });
+        if (demoPreviousActiveCard !== null) send({ type: 'card-insert', slot: demoPreviousActiveCard });
+      }
+      if (demoInsertedSd && inserted) {
+        send({ type: 'sd-eject' });
+        inserted = false;
+        $('#sd-state').textContent = 'Ejected';
+        $('#sd-toggle').setAttribute('aria-label', 'Insert SD card');
+        $('#sd-toggle').setAttribute('aria-pressed', 'false');
+        $('#sd-toggle').title = 'Click to insert SD card';
+        $('#sd-hint').textContent = 'Click to insert';
+        $('#sd-stage').classList.remove('inserted');
+      }
+      stateFiles = await snapshot();
+      demoInsertedSd = false;
+      demoPreviousActiveCard = null;
+      demoSessionActive = false;
+      return;
+    }
+    const demo = createDemoFiles(network);
+    const alternateDemo = createDemoFiles(network === 'mainnet' ? 'testnet' : 'mainnet');
+    const retiredDemoFiles = ['mainnet-multisig-unsigned.psbt', 'mainnet-ghost-zoo-mirror-2of3.json'];
+    const demoFileNames = new Set([...demo.files, ...alternateDemo.files].map(file => file.name).concat(retiredDemoFiles));
+    stateFiles = await snapshot();
+    const sdFiles = stateFiles.filter(file => file.path.startsWith('sd/'));
+    const previousDemoFiles = sdFiles.filter(file => demoFileNames.has(file.path.slice(3)));
+    let projected = sdFiles.reduce((total, file) => total + file.bytes.byteLength, 0) -
+      previousDemoFiles.reduce((total, file) => total + file.bytes.byteLength, 0);
     for (const file of demo.files) {
-      projected += file.bytes.byteLength - (sdFileSizes.get(file.name) || 0);
+      projected += file.bytes.byteLength;
       if (projected > SD_CAPACITY_BYTES) throw new Error('Virtual SD card is full');
     }
+    if (!demoSessionActive) {
+      demoPreviousActiveCard = activeCard;
+      demoSessionActive = true;
+    }
+    if (!inserted) {
+      send({ type: 'sd-insert' });
+      demoInsertedSd = true;
+      inserted = true;
+      $('#sd-state').textContent = 'Inserted';
+      $('#sd-toggle').setAttribute('aria-label', 'Remove SD card');
+      $('#sd-toggle').setAttribute('aria-pressed', 'true');
+      $('#sd-toggle').title = 'Click to remove SD card';
+      $('#sd-hint').textContent = 'Click to remove';
+      $('#sd-stage').classList.add('inserted');
+    }
+    for (const file of previousDemoFiles) send({ type: 'sd-delete', name: file.path.slice(3) });
     for (const file of demo.files) send({ type: 'sd-import', name: file.name, bytes: file.bytes });
-    if (!inserted) send({ type: 'sd-insert' });
     stateFiles = await snapshot();
+    const priorCardState = new Map([1, 2].map(slot => [slot,
+      stateFiles.filter(file => file.path.startsWith(`cards/${slot}/`))
+        .map(file => ({ path: file.path, bytes: file.bytes.slice() }))]));
     const hasCard = slot => stateFiles.some(file => file.path === `cards/${slot}/private.key`);
     for (const slot of [1, 2]) {
       if (hasCard(slot)) continue;
-      send({ type: 'card-insert', slot });
-      stateFiles = await snapshot();
-      send({ type: 'card-remove' });
+      send({ type: 'card-create', slot });
       stateFiles = await snapshot();
     }
     const occupied = slot => stateFiles.some(file => file.path === `cards/${slot}/secret.bin` && file.bytes.byteLength);
     for (const card of demo.cards) {
       if (occupied(card.slot)) continue;
+      if (!demoCardPriorState.has(card.slot)) {
+        demoCardPriorState.set(card.slot, priorCardState.get(card.slot));
+      }
       send({ type: 'state-import', files: [
         { path: `cards/${card.slot}/secret.bin`, bytes: card.secret },
         { path: `cards/${card.slot}/pin.bin`, bytes: card.pinDigest },
         { path: `cards/${card.slot}/attempts`, bytes: new Uint8Array([10]) },
       ] });
+      stateFiles = await snapshot();
     }
     for (const card of demo.cards) {
-      demoCardMetadata.set(card.slot, {
-        label: card.label,
-        pin: card.pin,
-        seed: `${card.id}-seed`,
-      });
+      if (demoCardPriorState.has(card.slot)) {
+        demoCardMetadata.set(card.slot, { label: card.label, pin: card.pin, seed: `${card.id}-seed` });
+      }
     }
-    send({ type: 'card-insert', slot: 1 });
-    stateFiles = await snapshot();
     renderCards(cardSlots);
-    button.textContent = 'Import Demo Data Again';
+    $('#sd-state').textContent = inserted ? 'Inserted' : 'Ejected';
   } catch (error) {
     log(`Demo import error: ${error.message}`);
   } finally {
     demoImportBusy = false;
-    button.disabled = false;
+    networkSelect.disabled = false;
   }
 }
 function setLoadingMessage(message) {
@@ -552,6 +695,13 @@ function onWorkerMessage({ data }, generation = runGeneration) {
     send({ type: 'sd-list' });
     send({ type: 'card-list' });
     notifyParent({ type: 'simulator-running', variant });
+  } else if (data.type === 'usb-output') {
+    // The firmware protocol is opaque binary data. Never forward a worker's
+    // text message into the Virtual Host control channel.
+    const bytes = data.bytes;
+    if (virtualHostSocket?.readyState === WebSocket.OPEN &&
+        (bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes)) &&
+        bytes.byteLength <= (1 << 20)) virtualHostSocket.send(bytes);
   } else if (data.type === 'log') {
     if (/^(SPECTER_|MOCKUI_)/.test(data.message)) startupPhase = data.message;
     if (data.message === 'SPECTER_IMPORTS_DONE' || data.message === 'SPECTER_MAIN_IMPORTED') {
@@ -681,7 +831,13 @@ async function start() {
     if (version) workerUrl.searchParams.set('v', version);
     workerUrl.searchParams.set('worker', workerRevision);
     log(`Starting ${workerUrl.href}; display: ${displayMode}; generation: ${generation}`);
-    worker = new Worker(workerUrl, { name: 'Specter DIY' });
+    // A blob worker inherits this page's CSP. A normal script URL would not,
+    // leaving PR-built firmware glue free to open arbitrary network sockets.
+    const workerResponse = await fetch(workerUrl);
+    if (!workerResponse.ok) throw new Error(`Worker HTTP ${workerResponse.status}`);
+    workerBlobUrl = URL.createObjectURL(new Blob([await workerResponse.text()],
+      { type: 'text/javascript' }));
+    worker = new Worker(workerBlobUrl, { name: 'Specter DIY' });
     worker.onmessage = event => {
       if (generation === runGeneration) onWorkerMessage(event, generation);
     };
@@ -758,7 +914,7 @@ addEventListener('message', async event => {
       requestId: event.data.requestId, files: await snapshot() });
   } else if (gallery && event.data?.type === 'peripheral-command') {
     const command = event.data.command;
-    if (['sd-insert', 'sd-eject', 'sd-import', 'sd-clear', 'sd-delete', 'card-insert',
+    if (['sd-insert', 'sd-eject', 'sd-import', 'sd-clear', 'sd-delete', 'card-insert', 'card-create',
       'card-remove', 'card-reset', 'state-import', 'state-remove-prefix'].includes(command?.type)) {
       send(command);
     }
@@ -911,7 +1067,14 @@ loading.querySelector('[data-loading-details]').onclick = event => {
 $('#sd-toggle').onclick = () => send({ type: inserted ? 'sd-eject' : 'sd-insert' });
 $('#sd-clear').onclick = () => send({ type: 'sd-clear' });
 $('#sd-add').onclick = () => picker.click();
-$('#demo-load').onclick = importDemoData;
+$('#demo-network').onchange = event => {
+  event.target.title = event.target.value === 'mainnet'
+    ? 'Unsafe public demo seeds and private keys. Never send or store real funds. Mainnet transactions use fictional inputs. The virtual Smartcards receive the public Ghost and Zoo seeds.'
+    : event.target.value === 'testnet'
+    ? 'Unsafe public test seeds only. Includes Ghost, Zoo, their BIP85 children, demo PSBTs and a public-only Mirror multisig example. Two virtual Smartcards receive the Ghost and Zoo seeds.'
+    : 'No demo set is loaded. Selecting None removes demo files and restores Smartcards to their previous state.';
+  importDemoData();
+};
 picker.onchange = () => { importFiles(picker.files); picker.value = ''; };
 $('#sd-drop').ondragover = event => { event.preventDefault(); $('#sd-drop').classList.add('dragging'); };
 $('#sd-drop').ondragleave = () => $('#sd-drop').classList.remove('dragging');
@@ -943,6 +1106,7 @@ $('#camera-screen-back').onclick = () => { screenCamera.hidden = true; };
 cameraSelect.onchange = () => startCamera(cameraSelect.value);
 addEventListener('pagehide', () => {
   runGeneration++; clearTimeout(recoveryTimer); clearStartupTimer(); stopLoadingClock();
+  clearTimeout(virtualHostRetryTimer); virtualHostSocket?.close();
   stopCamera(); worker?.terminate(); worker = undefined;
 });
 
@@ -1026,6 +1190,10 @@ function updateBuildMetadata(manifest) {
 }
 
 try {
+  if (params.get('virtual-host') === '1' && !embedded && !gallery) {
+    $('#virtual-host').hidden = false;
+    connectVirtualHost();
+  }
   stateFiles = await awaitPeripherals();
   const pointerPath = variant === 'diy' ? 'browser/current.json' :
     variant === 'play' ? 'browser/variants/specter-playground.json' :
@@ -1033,19 +1201,13 @@ try {
   const pointer = await (await fetch(new URL(pointerPath, siteRoot), { cache: 'no-store' })).json();
   const buildPath = String(pointer.build || '').replace(/^\/+/, '');
   version = pointer.version;
-  if (!/^builds\/[A-Za-z0-9-]+\/[A-Za-z0-9-]+\/[a-f0-9]{40}\/$/.test(buildPath)) throw new Error('Invalid build pointer');
+  if (!/^builds\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?\/[a-f0-9]{40}\/$/.test(buildPath)) throw new Error('Invalid build pointer');
   build = new URL(buildPath, siteRoot).href;
   if (!/^[a-f0-9]{16}$/.test(version)) throw new Error('Invalid artifact version');
   const manifest = await (await fetch(`${build}build-info.json`, { cache: 'no-store' })).json();
   const source = manifest.source || manifest;
   const simulator = manifest.simulator || {};
-  if (!build.includes(source.commit) || manifest.artifact_set_sha256?.slice(0, 16) !== version) {
-    throw new Error('Build manifest mismatch');
-  }
-  const expectedRepos = variant === 'diy' ? ['cryptoadvance/specter-diy', 'schnuartz/specter-diy', 'schnuartz-ai/specter-diy'] :
-    variant === 'play' ? ['k9ert/specter-playground'] : ['schnuartz/specter-playground'];
-  if (!expectedRepos.includes(source.repository?.toLowerCase())) throw new Error('Wrong firmware variant in build manifest');
-  if (!/^[a-f0-9]{40}$/.test(source.commit)) throw new Error('Invalid source commit in build manifest');
+  validateBuildProvenance(buildPath, source, variant, manifest.artifact_set_sha256, version);
   if (manifest.simulator && (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(simulator.repository) ||
       !/^[a-f0-9]{40}$/.test(simulator.commit))) throw new Error('Invalid simulator provenance in build manifest');
   program = manifest.entrypoint === 'mockui' ? 'mockui' : 'wallet';

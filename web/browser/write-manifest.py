@@ -8,6 +8,8 @@ import re
 import subprocess
 import sys
 
+from source_project import is_specter_diy_repository
+
 source, output = (Path(p).resolve() for p in sys.argv[1:3])
 source_repository = sys.argv[3]
 simulator_repository = sys.argv[4]
@@ -67,7 +69,7 @@ manifest = {
     "built_at": datetime.now(timezone.utc).isoformat(),
     "artifacts": artifacts,
 }
-if source_repository.lower() in ("cryptoadvance/specter-diy", "schnuartz/specter-diy", "schnuartz-ai/specter-diy"):
+if is_specter_diy_repository(source_repository):
     manifest["firmware_version"] = specter_firmware_version()
 if len(sys.argv) > 6 and sys.argv[6] == "mockui":
     manifest["application"] = "MockUI"

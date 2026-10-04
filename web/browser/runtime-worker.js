@@ -6,69 +6,8 @@ let scannerActive = false;
 let program = 'wallet';
 self.screen = { width: 480, height: 800 };
 const send = (type, details = {}) => postMessage({ type, ...details });
-const workerRevision = '2026-10-03.developer-inspector1';
+const workerRevision = '2026-10-04.developer-inspector2';
 let inspectorEnabled = false;
-// Runs on the firmware's asyncio loop so inspection never re-enters the WASM VM.
-const inspectorPython = `import os, gc, json, asyncio
-def exists(path):
-    try:
-        os.stat(path)
-        return True
-    except OSError:
-        return False
-def install(main):
-    original = main.Specter.setup
-    started = [False]
-    async def report(device):
-        while True:
-            try:
-                if exists('/bridge/inspector-disabled'):
-                    if exists('/bridge/inspector-state.json'):
-                        os.remove('/bridge/inspector-state.json')
-                    await asyncio.sleep_ms(100)
-                    continue
-                with open('/bridge/inspector-request', 'r') as f:
-                    request = json.loads(f.read())
-                os.remove('/bridge/inspector-request')
-                store = device.keystore
-                screen = getattr(device.gui, 'scr', None)
-                mnemonic = getattr(store, 'mnemonic', None)
-                mnemonic_text = mnemonic if isinstance(mnemonic, str) else None
-                root = getattr(store, 'root', None)
-                enc_secret = getattr(store, 'enc_secret', None)
-                data = {'requestId': int(request.get('requestId')), 'allocatedBytes': gc.mem_alloc(), 'freeBytes': gc.mem_free(),
-                    'network': device.network, 'menu': getattr(device.current_menu, '__name__', 'unknown'),
-                    'screen': type(screen).__name__ if screen is not None else 'unavailable',
-                    'keystore': type(store).__name__ if store is not None else None,
-                    'keystoreObjects': {
-                        'keystore.mnemonic': {'present': mnemonic_text is not None,
-                            'wordCount': len(mnemonic_text.split()) if mnemonic_text is not None else 0,
-                            'utf8Bytes': len(mnemonic_text.encode()) if mnemonic_text is not None else 0},
-                        'keystore.root': {'present': root is not None,
-                            'type': type(root).__name__ if root is not None else None},
-                        'keystore.enc_secret': {'loaded': enc_secret is not None,
-                            'bytes': len(enc_secret) if enc_secret is not None else 0},
-                        'bip39_seed': {'retainedAsKeystoreField': False,
-                            'note': 'Temporary local value during mnemonic derivation.'}},
-                    'apps': [type(app).__name__ for app in device.apps]}
-                if request.get('includeSensitive') and mnemonic_text is not None and not exists('/bridge/inspector-sensitive-cancelled'):
-                    data['sensitiveValues'] = {'keystore.mnemonic': mnemonic_text}
-                if not exists('/bridge/inspector-disabled'):
-                    with open('/bridge/inspector-state.json', 'w') as f:
-                        json.dump(data, f)
-            except OSError:
-                pass
-            except Exception as e:
-                with open('/bridge/inspector-state.json', 'w') as f:
-                    json.dump({'error': str(e)}, f)
-            await asyncio.sleep_ms(100)
-    async def setup(device):
-        if not started[0]:
-            asyncio.create_task(report(device))
-            started[0] = True
-        return await original(device)
-    main.Specter.setup = setup
-`;
 const SD_CAPACITY_BYTES = 8_000_000_000;
 const SD_ENOSPC = 51;
 let fatalReported = false;
@@ -337,7 +276,7 @@ function collectInspection(data, attempts) {
     return;
   }
   const matchingFirmware = firmware?.requestId === data.requestId ? firmware : null;
-  const { sensitiveValues: capturedSensitiveValues, ...firmwareState } = matchingFirmware || {};
+  const { requestId: ignoredFirmwareRequestId, sensitiveValues: capturedSensitiveValues, ...firmwareState } = matchingFirmware || {};
   const sensitiveCancelled = data.includeSensitive && fs.analyzePath('/bridge/inspector-sensitive-cancelled').exists;
   send('inspector-state', { requestId: data.requestId, files: data.includeFiles ? inspectFiles(fs) : null,
     memoryBytes: Module.HEAPU8.buffer.byteLength,
@@ -355,14 +294,21 @@ function handle(data) {
   const fs = Module.FS;
   try {
     if (data.type === 'inspector-enable') {
-      inspectorEnabled = Boolean(data.enabled);
+      const enabled = Boolean(data.enabled);
+      if (enabled !== inspectorEnabled) {
+        if (typeof Module._browser_pointer !== 'function') {
+          throw new Error('Firmware inspector bridge is unavailable in this runtime');
+        }
+        // This uses the existing pointer export's reserved sentinel values.
+        // C schedules the Python callback on MicroPython's own event loop.
+        Module._browser_pointer(-1, enabled ? 1 : 0, -1);
+      }
+      inspectorEnabled = enabled;
       if (!inspectorEnabled) {
-        fs.writeFile('/bridge/inspector-disabled', new Uint8Array([1]));
-        for (const path of ['/bridge/inspector-request', '/bridge/inspector-state.json']) {
+        for (const path of ['/bridge/inspector-request', '/bridge/inspector-state.json',
+          '/bridge/inspector-sensitive-cancelled']) {
           if (fs.analyzePath(path).exists) fs.unlink(path);
         }
-      } else if (fs.analyzePath('/bridge/inspector-disabled').exists) {
-        fs.unlink('/bridge/inspector-disabled');
       }
     } else if (data.type.startsWith('inspector-')) {
       if (!inspectorEnabled) throw new Error('Developer Options are disabled');
@@ -455,10 +401,23 @@ function handle(data) {
       if (qrQueue.length >= 16) qrQueue.shift();
       qrQueue.push(bytes);
       flushQr();
+    } else if (data.type === 'usb-data') {
+      const incoming = data.bytes instanceof Uint8Array ? data.bytes : new Uint8Array(data.bytes);
+      const path = '/bridge/usb-in.bin';
+      const previous = fs.analyzePath(path).exists ? fs.readFile(path) : new Uint8Array();
+      if (previous.byteLength + incoming.byteLength > (1 << 20)) throw new Error('USB receive queue is full');
+      const combined = new Uint8Array(previous.byteLength + incoming.byteLength);
+      combined.set(previous);
+      combined.set(incoming, previous.byteLength);
+      fs.writeFile(path, combined);
     } else if (data.type === 'card-insert') {
       const slot = cardSlot(data.slot);
       if (!fs.analyzePath(`/state/cards/${slot}/private.key`).exists) createCard(fs, slot);
       fs.writeFile('/bridge/card-slot', new Uint8Array([slot]));
+      cardInfo(fs);
+    } else if (data.type === 'card-create') {
+      const slot = cardSlot(data.slot);
+      if (!fs.analyzePath(`/state/cards/${slot}/private.key`).exists) createCard(fs, slot);
       cardInfo(fs);
     } else if (data.type === 'card-remove') {
       if (fs.analyzePath('/bridge/card-slot').exists) fs.unlink('/bridge/card-slot');
@@ -490,6 +449,14 @@ function handle(data) {
     send('operation-error', { operation: data.type, name: error?.name, code: error?.code,
       message: error?.message || String(error), ...storage });
   }
+}
+function flushUsb(fs) {
+  const path = '/bridge/usb-out.bin';
+  if (!fs.analyzePath(path).exists) return;
+  const bytes = fs.readFile(path);
+  if (!bytes.byteLength) return;
+  fs.unlink(path);
+  send('usb-output', { bytes });
 }
 onmessage = async ({ data }) => {
   if (data.type !== 'start') {
@@ -532,20 +499,6 @@ onmessage = async ({ data }) => {
         mkdirs(fs, '/state/cards');
         mkdirs(fs, '/bridge');
         installSdQuota(fs);
-        if (program === 'wallet' && !data.sdProbe && !data.qrProbe && !data.cardProbe && !data.diag) {
-          try {
-            const bootPath = '/browser/boot.py';
-            const boot = fs.readFile(bootPath, { encoding: 'utf8' });
-            if (boot.includes('import main\n') && !boot.includes('browser_inspector.install(main)')) {
-              fs.writeFile('/browser/browser_inspector.py', inspectorPython);
-              fs.writeFile(bootPath, boot.replace('import main\n', 'import main\nimport browser_inspector\nbrowser_inspector.install(main)\n'));
-            } else if (!boot.includes('browser_inspector.install(main)')) {
-              send('diagnostic', { event: 'inspector-install-skipped', message: 'Could not find the normal firmware entry point.' });
-            }
-          } catch (error) {
-            send('diagnostic', { event: 'inspector-install-skipped', message: error.message || String(error) });
-          }
-        }
         for (const file of data.stateFiles || []) {
           if (!file.path || file.path.startsWith('ramdisk/')) continue;
           const name = relativePath(file.path);
@@ -562,6 +515,7 @@ onmessage = async ({ data }) => {
           runtimeReady = true;
           for (const item of pending.splice(0)) handle(item);
           setInterval(flushQr, 50);
+          setInterval(() => flushUsb(Module.FS), 20);
           setInterval(pollScanner, 80);
           pollScanner();
           setTimeout(() => send('running'), 500);

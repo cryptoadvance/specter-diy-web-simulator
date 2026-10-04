@@ -27,5 +27,7 @@ print("SPECTER_IMPORTS_DONE")
 import browser_sd
 browser_sd.install()
 import main
+import browser_inspector
+browser_inspector.install(main)
 print("SPECTER_MAIN_IMPORTED")
 main.main()

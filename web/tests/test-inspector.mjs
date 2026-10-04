@@ -27,8 +27,7 @@ await page.addInitScript(() => {
           scannerActive: false, qrQueued: 0, sdInserted: false, cardSlot: null,
           firmware: { requestId: message.requestId, allocatedBytes: 1024, freeBytes: 2048,
             screen: 'test', keystore: 'FlashKeyStore',
-            keystoreObjects: { 'keystore.mnemonic': { present: true, wordCount: phrase.split(' ').length,
-              utf8Bytes: new TextEncoder().encode(phrase).length } },
+            keystoreObjects: { 'keystore.mnemonic': { present: true } },
             apps: ['test-app'] },
           sensitiveValues: message.includeSensitive ? { 'keystore.mnemonic': phrase } : undefined });
       }
@@ -85,9 +84,13 @@ assert.equal(await page.evaluate(() => window.inspectorRequests.some(message => 
 
 await page.locator('#inspector-baseline').click();
 await page.locator('#inspector-changes').getByText('Baseline captured').waitFor();
+await page.locator('#inspector-compare').click();
+await page.locator('#inspector-changes').getByText('No file or firmware-state changes detected.').waitFor();
 await page.evaluate(() => { window.inspectorFiles[0].hash = 'hash2'; });
 await page.locator('#inspector-compare').click();
 await page.locator('#inspector-changes').getByText('Changed: /state/flash/network').waitFor();
+assert.doesNotMatch(await page.locator('#inspector-changes').textContent(), /^firmware:/m,
+  'A new firmware request ID must not look like a baseline change');
 
 await page.locator('#technical-details summary').click();
 assert.equal(await page.locator('#build-repository-link').isVisible(), true);

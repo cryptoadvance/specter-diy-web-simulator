@@ -1,7 +1,7 @@
-"""Browser replacements for the Unix simulator's TCP hardware transports.
+"""Browser replacements for the Unix simulator's local hardware transports.
 
-The QR UART consumes decoded scanner bytes placed in /bridge/qr.bin by the
-browser shell. No socket or network API is exposed to the wallet runtime.
+The QR UART and USB VCP use files under /bridge. The browser shell owns the
+loopback WebSocket; no general socket or network API is exposed to the wallet.
 """
 import os
 
@@ -74,15 +74,46 @@ class UART:
         return data
 
 
-class USB_VCP(UART):
+class USB_VCP:
     RTS = 1
     CTS = 2
+    input_path = "/bridge/usb-in.bin"
+    output_path = "/bridge/usb-out.bin"
 
     def __init__(self, *args, **kwargs):
-        super().__init__(None)
+        pass
+
+    def init(self, *args, **kwargs):
+        pass
+
+    def deinit(self):
+        pass
 
     def any(self):
-        return False
+        try:
+            return os.stat(self.input_path)[6]
+        except OSError:
+            return 0
+
+    def read(self, size=None):
+        if not self.any():
+            return None
+        with open(self.input_path, "rb") as stream:
+            data = stream.read() if size is None else stream.read(size)
+            remainder = stream.read() if size is not None else b""
+        if remainder:
+            with open(self.input_path, "wb") as stream:
+                stream.write(remainder)
+        else:
+            os.remove(self.input_path)
+        return data
+
+    def write(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        with open(self.output_path, "ab") as stream:
+            stream.write(data)
+        return len(data)
 
 
 _usb_mode = None
