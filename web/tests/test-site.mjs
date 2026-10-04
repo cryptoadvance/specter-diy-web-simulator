@@ -40,6 +40,10 @@ const keystoreObjects = JSON.parse(await page.locator('#inspector-objects').text
 for (const name of ['keystore.mnemonic', 'keystore.root', 'keystore.enc_secret', 'bip39_seed']) {
   if (!(name in keystoreObjects)) throw new Error(`Runtime RAM inspection omitted ${name}`);
 }
+await page.locator('#inspector-baseline').click();
+await page.locator('#inspector-changes').getByText('Baseline captured').waitFor();
+await page.locator('#inspector-compare').click();
+await page.locator('#inspector-changes').getByText('No file or firmware-state changes detected.').waitFor();
 if (!await page.evaluate(() => window.inspectorMessages.some(message =>
   message.type === 'inspector-enable' && message.enabled === true))) {
   throw new Error('Enabling Developer Options did not activate the live firmware inspector');
