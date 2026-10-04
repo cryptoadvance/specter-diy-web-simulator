@@ -64,6 +64,8 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("ref: ${{ needs.validate.outputs.base_sha }}", runtime)
         self.assertNotIn("needs.validate.outputs.head_sha", runtime)
         self.assertIn("package_trusted_runtime.py", runtime)
+        self.assertNotIn("pip install", runtime)
+        self.assertNotIn("requirements.txt", runtime)
         self.assertIn("name: trusted-micropython-runtime", runtime)
 
         build = job("build", "trusted_runtime")

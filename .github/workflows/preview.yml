@@ -257,8 +257,6 @@ jobs:
             libsdl2-dev \
             pkg-config \
             python3
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -r specter-diy/requirements.txt -r specter-diy/test/integration/requirements.txt
       - name: Install pinned Emscripten 3.1.74
         run: |
           mkdir -p simulator/.browser-work
