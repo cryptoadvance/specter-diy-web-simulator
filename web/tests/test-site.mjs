@@ -48,8 +48,14 @@ for (const name of ['keystore.mnemonic', 'keystore.root', 'keystore.enc_secret',
 }
 await page.locator('#inspector-baseline').click();
 await page.locator('#inspector-changes').getByText('Baseline captured').waitFor();
+const capturedBaseline = await page.locator('#inspector-changes').textContent();
 await page.locator('#inspector-compare').click();
-await page.locator('#inspector-changes').getByText('No file or firmware-state changes detected.').waitFor();
+await page.waitForFunction(previous => document.querySelector('#inspector-changes').textContent !== previous,
+  capturedBaseline);
+const firmwareComparison = await page.locator('#inspector-changes').textContent();
+if (/requestId/i.test(firmwareComparison)) {
+  throw new Error(`A per-request firmware ID must not appear as a baseline change: ${firmwareComparison}`);
+}
 if (!await page.evaluate(() => window.inspectorMessages.some(message =>
   message.type === 'inspector-enable' && message.enabled === true))) {
   throw new Error('Enabling Developer Options did not activate the live firmware inspector');

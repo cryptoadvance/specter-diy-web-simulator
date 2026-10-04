@@ -179,7 +179,8 @@ with public test phrases.
 
 CI runs both the mocked inspector UI test and an integration test that builds the
 current Specter-DIY WebAssembly runtime from source, then verifies inspection
-activation, shutdown, baseline stability, and normal restart with real firmware.
+activation, shutdown, request-ID-safe baseline comparison, and normal restart
+with real firmware.
 
 GitHub Pages does not provide COOP/COEP response headers. This build does not
 require SharedArrayBuffer. The DIY display has a Canvas pixel bridge for
