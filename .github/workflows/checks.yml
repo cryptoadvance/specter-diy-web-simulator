@@ -53,11 +53,18 @@ jobs:
       - name: Build the real Specter DIY WebAssembly runtime
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          simulator_commit="$(git rev-parse HEAD)"
+          source_commit="$(git -C "$GITHUB_WORKSPACE/specter-diy" rev-parse HEAD)"
           SPECTER_SRC="$GITHUB_WORKSPACE/specter-diy" \
+            SPECTER_SOURCE_REPOSITORY=cryptoadvance/specter-diy \
             SIMULATOR_REPOSITORY=cryptoadvance/specter-diy-web-simulator \
-            SIMULATOR_COMMIT="$(git rev-parse HEAD)" \
+            SIMULATOR_COMMIT="$simulator_commit" \
             bash web/browser/build-browser.sh
-          python3 web/browser/verify_build.py
+          EXPECTED_SHA="$source_commit" \
+            SPECTER_SOURCE_REPOSITORY=cryptoadvance/specter-diy \
+            SIMULATOR_REPOSITORY=cryptoadvance/specter-diy-web-simulator \
+            SIMULATOR_COMMIT="$simulator_commit" \
+            python3 web/browser/verify_build.py
       - name: Install Chromium for browser UI tests
         run: npx --prefix web playwright install --with-deps chromium
       - name: Test inspector UI and current real firmware runtime

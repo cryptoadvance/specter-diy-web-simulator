@@ -23,7 +23,13 @@ await page.addInitScript(() => {
   };
 });
 await page.goto(base, { waitUntil: 'domcontentloaded' });
-await page.locator('#st').getByText('Running locally').waitFor({ timeout: 45000 });
+try { await page.locator('#st').getByText('Running locally').waitFor({ timeout: 45000 }); }
+catch (error) {
+  console.error(JSON.stringify({ status: await page.locator('#st').textContent(),
+    debug: await page.locator('#debug-log').textContent(), errors,
+    requests: requests.filter(url => /current\.json|build-info|micropython|browser\.js/.test(url)) }, null, 2));
+  throw error;
+}
 if (await page.locator('#advanced-options').isChecked() || await page.locator('#developer-inspector').isVisible()) {
   throw new Error('Developer Options must be off by default');
 }
