@@ -270,6 +270,14 @@ jobs:
           test "$(git -C simulator/.browser-work/emsdk rev-parse HEAD)" = "$(cat simulator/.preview-config/emsdk-commit)"
           simulator/.browser-work/emsdk/emsdk install 3.1.74
           simulator/.browser-work/emsdk/emsdk activate 3.1.74
+      # The untrusted firmware build's `make disco` freezes src/git_info.py
+      # with HEAD_SHA. Recreate that generated module using only the base's
+      # trusted generator so Emscripten's JS and the PR WASM share one layout.
+      - name: Recreate trusted frozen source metadata for the validated PR head
+        working-directory: specter-diy
+        env:
+          SPECTER_GIT_COMMIT: ${{ needs.validate.outputs.head_sha }}
+        run: python3 tools/embed_git_info.py
       - name: Build trusted JavaScript from the exact validated base SHA
         env:
           SPECTER_SOURCE_REPOSITORY: ${{ needs.validate.outputs.base_repository }}

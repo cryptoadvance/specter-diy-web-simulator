@@ -76,7 +76,12 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("secrets.", runtime)
         self.assertIn("ref: ${{ needs.validate.outputs.base_sha }}", runtime)
         self.assertIn("SIMULATOR_COMMIT: ${{ github.sha }}", runtime)
-        self.assertNotIn("needs.validate.outputs.head_sha", runtime)
+        self.assertIn("SPECTER_GIT_COMMIT: ${{ needs.validate.outputs.head_sha }}", runtime)
+        self.assertIn("python3 tools/embed_git_info.py", runtime)
+        self.assertLess(
+            runtime.index("python3 tools/embed_git_info.py"),
+            runtime.index("Build trusted JavaScript from the exact validated base SHA"),
+        )
         self.assertIn("package_trusted_runtime.py", runtime)
         self.assertNotIn("pip install", runtime)
         self.assertNotIn("requirements.txt", runtime)
