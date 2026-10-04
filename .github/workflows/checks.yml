@@ -48,8 +48,10 @@ jobs:
           path: specter-diy
           submodules: recursive
           persist-credentials: false
-      - name: Verify browser freeze inputs
-        run: python3 web/tests/test-browser-manifest.py "$GITHUB_WORKSPACE/specter-diy"
+      - name: Write and verify browser freeze manifest
+        run: |
+          python3 web/browser/write-browser-manifest.py "$GITHUB_WORKSPACE/specter-diy"
+          python3 web/tests/test-browser-manifest.py "$GITHUB_WORKSPACE/specter-diy"
       - name: Install Emscripten 3.1.74
         run: |
           git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
