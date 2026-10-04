@@ -85,7 +85,7 @@ jobs:
         run: python3 web/tools/validate_preview_request.py
 
   build:
-    name: Build firmware, browser simulator, and tests
+    name: Build PR firmware and browser payload
     needs: validate
     if: needs.validate.outputs.action == 'build'
     runs-on: ubuntu-latest
@@ -111,7 +111,6 @@ jobs:
       SPECTER_SOURCE_DIR: ${{ github.workspace }}/specter-diy
       SIMULATOR_DIR: ${{ github.workspace }}/simulator
       SIMULATOR_WEB_DIR: ${{ github.workspace }}/simulator/web
-      VIRTUAL_HOST_DIR: ${{ github.workspace }}/virtual-host
       FIRMWARE_ARTIFACT_DIR: ${{ github.workspace }}/firmware-artifact
       BROWSER_ARCHIVE: ${{ github.workspace }}/browser-preview-payload.tar.gz
     steps:
@@ -131,26 +130,17 @@ jobs:
           submodules: recursive
           fetch-depth: 0
           persist-credentials: false
-      - name: Check out pinned Virtual Host compatibility target
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
-        with:
-          repository: cryptoadvance/specter-virtual-host
-          ref: 3cf3ecd58a97da0f2cc4b7586ca33abf02f68372
-          path: virtual-host
-          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
+      - name: Check the PR browser manifest in the untrusted build job
+        run: python3 simulator/web/tests/test-browser-manifest.py "$SPECTER_SOURCE_DIR"
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5 pinned commit
-        with:
-          go-version: '1.22'
-      - name: Install firmware and browser test dependencies
+      - name: Install firmware build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -193,42 +183,6 @@ jobs:
           SIMULATOR_REPOSITORY: ${{ github.repository }}
           SIMULATOR_COMMIT: ${{ github.sha }}
         run: bash simulator/web/browser/build-browser.sh
-      - name: Install browser test dependencies
-        run: |
-          npm ci --prefix simulator/web
-          npx --prefix simulator/web playwright install --with-deps chromium firefox webkit
-      - name: Run all Web Simulator Python and provenance tests
-        env:
-          EXPECTED_SHA: ${{ needs.validate.outputs.head_sha }}
-          SPECTER_SOURCE_REPOSITORY: ${{ needs.validate.outputs.head_repository }}
-          SIMULATOR_COMMIT: ${{ github.sha }}
-          SIMULATOR_REPOSITORY: ${{ github.repository }}
-        run: |
-          for test in simulator/web/tests/test-*.py; do
-            if [[ "$test" == *test-browser-manifest.py ]]; then
-              python3 "$test" "$SPECTER_SOURCE_DIR"
-            else
-              python3 "$test"
-            fi
-          done
-          python3 simulator/web/browser/verify_build.py
-      - name: Run Chromium browser, compatibility, and network policy tests
-        run: |
-          python3 -m http.server 8765 --directory simulator/web > /tmp/specter-browser.log 2>&1 &
-          echo $! > /tmp/specter-browser.pid
-          for attempt in $(seq 1 30); do curl --fail --silent http://127.0.0.1:8765/ >/dev/null && break; sleep 1; done
-          CI=true npm run test:browser --prefix simulator/web
-          npm run test:provenance --prefix simulator/web
-          npm run test:compat --prefix simulator/web
-          node simulator/web/tests/test-network-policy.mjs
-      - name: Run pinned Virtual Host and USB transport tests
-        run: |
-          test "$(git -C virtual-host rev-parse HEAD)" = "$(cat simulator/.preview-config/virtual-host-commit)"
-          (cd virtual-host && go test ./...)
-          (cd virtual-host && go run . --site http://127.0.0.1:8765 --no-open) > /tmp/specter-virtual-host.log 2>&1 &
-          for attempt in $(seq 1 30); do curl --silent --output /dev/null http://127.0.0.1:8788/ && break; sleep 1; done
-          python3 simulator/web/tests/test-usb-vcp.py
-          node simulator/web/tests/test-usb-transport.mjs
       - name: Package allowlisted browser output
         run: python3 simulator/web/tools/package_browser.py
       - name: Upload browser build payload
@@ -329,9 +283,145 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  verify:
+    name: Verify the published preview on a clean runner
+    needs: [validate, build, trusted_runtime]
+    if: needs.validate.outputs.action == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    env:
+      BASE_REPOSITORY: ${{ needs.validate.outputs.base_repository }}
+      BASE_SHA: ${{ needs.validate.outputs.base_sha }}
+      BASE_REF: ${{ needs.validate.outputs.base_ref }}
+      HEAD_REPOSITORY: ${{ needs.validate.outputs.head_repository }}
+      HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+      HEAD_REF: ${{ needs.validate.outputs.head_ref }}
+      PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+      REQUEST_ID: ${{ needs.validate.outputs.request_id }}
+      SOURCE_UPDATED_AT: ${{ needs.validate.outputs.source_updated_at }}
+      SIMULATOR_REPOSITORY: ${{ github.repository }}
+      SIMULATOR_SHA: ${{ github.sha }}
+      PAGES_DIR: ${{ github.workspace }}/verification-pages
+      TRUSTED_WEB_DIR: ${{ github.workspace }}/simulator/web
+      BROWSER_ARCHIVE: ${{ github.workspace }}/browser-artifact/browser-preview-payload.tar.gz
+      FIRMWARE_DIR: ${{ github.workspace }}/firmware-artifact
+      TRUSTED_RUNTIME_DIR: ${{ github.workspace }}/trusted-runtime-artifact
+      BUILD_RESULT: success
+      FIRMWARE_URL: ${{ needs.build.outputs.firmware_url }}
+      TEST_BASE_URL: http://127.0.0.1:8765/
+    steps:
+      - name: Check out trusted Web Simulator test and publisher code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 pinned commit
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: simulator
+          persist-credentials: false
+      - name: Check out pinned Virtual Host compatibility target
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          repository: cryptoadvance/specter-virtual-host
+          ref: 3cf3ecd58a97da0f2cc4b7586ca33abf02f68372
+          path: virtual-host
+          persist-credentials: false
+      - name: Download browser build payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: browser-preview-payload
+          path: browser-artifact
+      - name: Download firmware artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: specter-firmware
+          path: firmware-artifact
+      - name: Download trusted JavaScript runtime
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: trusted-micropython-runtime
+          path: trusted-runtime-artifact
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5 pinned commit
+        with:
+          go-version: '1.22'
+      - name: Install trusted browser test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libffi-dev \
+            libgmp-dev \
+            libreadline-dev \
+            libsdl2-dev \
+            pkg-config \
+            python3
+          npm ci --prefix simulator/web
+          npx --prefix simulator/web playwright install --with-deps chromium firefox webkit
+      - name: Compose and validate the exact preview using the trusted publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 simulator/web/tools/publish_preview.py
+      - name: Verify the composed browser artifact hashes
+        env:
+          EXPECTED_SHA: ${{ needs.validate.outputs.head_sha }}
+          SPECTER_SOURCE_REPOSITORY: ${{ needs.validate.outputs.head_repository }}
+          SIMULATOR_COMMIT: ${{ github.sha }}
+          SIMULATOR_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 -c 'from pathlib import Path; import os; from simulator.web.browser.verify_build import verify; verify(Path(os.environ["PAGES_DIR"]) / "pr" / os.environ["PR_NUMBER"], os.environ["EXPECTED_SHA"], os.environ["SPECTER_SOURCE_REPOSITORY"], os.environ["SIMULATOR_COMMIT"], os.environ["SIMULATOR_REPOSITORY"])'
+      - name: Run trusted Web Simulator Python and provenance tests
+        env:
+          EXPECTED_SHA: ${{ needs.validate.outputs.head_sha }}
+          SPECTER_SOURCE_REPOSITORY: ${{ needs.validate.outputs.head_repository }}
+          SIMULATOR_COMMIT: ${{ github.sha }}
+          SIMULATOR_REPOSITORY: ${{ github.repository }}
+        run: |
+          for test in simulator/web/tests/test-*.py; do
+            if [[ "$test" == *test-browser-manifest.py ]]; then
+              continue
+            fi
+            python3 "$test"
+          done
+      - name: Serve the composed preview for browser and transport tests
+        run: |
+          python3 -m http.server 8765 --directory "$PAGES_DIR/pr/$PR_NUMBER" > /tmp/specter-browser.log 2>&1 &
+          echo $! > /tmp/specter-browser.pid
+          for attempt in $(seq 1 30); do curl --fail --silent "$TEST_BASE_URL" >/dev/null && break; sleep 1; done
+      - name: Run browser, compatibility, and network policy tests
+        run: |
+          CI=true npm run test:browser --prefix simulator/web
+          npm run test:provenance --prefix simulator/web
+          npm run test:compat --prefix simulator/web
+          node simulator/web/tests/test-network-policy.mjs
+      - name: Run pinned Virtual Host and USB transport tests
+        run: |
+          usb_site="$RUNNER_TEMP/specter-usb-preview"
+          mkdir -p "$usb_site"
+          cp -a "$PAGES_DIR/pr/$PR_NUMBER/." "$usb_site/"
+          cp simulator/web/index.html "$usb_site/index.html"
+          python3 -m http.server 8766 --directory "$usb_site" > /tmp/specter-usb-site.log 2>&1 &
+          for attempt in $(seq 1 30); do curl --fail --silent http://127.0.0.1:8766/ >/dev/null && break; sleep 1; done
+          test "$(git -C virtual-host rev-parse HEAD)" = "$(cat simulator/.preview-config/virtual-host-commit)"
+          (cd virtual-host && go test ./...)
+          (cd virtual-host && go run . --site http://127.0.0.1:8766/ --no-open) > /tmp/specter-virtual-host.log 2>&1 &
+          for attempt in $(seq 1 30); do curl --silent --output /dev/null http://127.0.0.1:8788/ && break; sleep 1; done
+          python3 simulator/web/tests/test-usb-vcp.py
+          TEST_BASE_URL=http://127.0.0.1:8766/ node simulator/web/tests/test-usb-transport.mjs
+
   finalize:
     name: Publish current preview state and result
-    needs: [validate, build, trusted_runtime]
+    needs: [validate, build, trusted_runtime, verify]
     if: ${{ always() && needs.validate.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -366,7 +456,7 @@ jobs:
       BROWSER_ARCHIVE: ${{ github.workspace }}/browser-artifact/browser-preview-payload.tar.gz
       FIRMWARE_DIR: ${{ github.workspace }}/firmware-artifact
       TRUSTED_RUNTIME_DIR: ${{ github.workspace }}/trusted-runtime-artifact
-      BUILD_RESULT: ${{ inputs.action == 'delete' && 'deleted' || (needs.build.result == 'success' && needs.trusted_runtime.result == 'success') && 'success' || (needs.build.result == 'cancelled' || needs.trusted_runtime.result == 'cancelled') && 'cancelled' || 'failure' }}
+      BUILD_RESULT: ${{ inputs.action == 'delete' && 'deleted' || (needs.build.result == 'success' && needs.trusted_runtime.result == 'success' && needs.verify.result == 'success') && 'success' || (needs.build.result == 'cancelled' || needs.trusted_runtime.result == 'cancelled' || needs.verify.result == 'cancelled') && 'cancelled' || 'failure' }}
       FIRMWARE_URL: ${{ needs.build.outputs.firmware_url }}
     steps:
       - name: Check out trusted publisher implementation
@@ -446,4 +536,5 @@ jobs:
           printf 'Action: `%s`\n' "$ACTION" >> "$GITHUB_STEP_SUMMARY"
           printf 'Build job: `%s`\n' '${{ needs.build.result }}' >> "$GITHUB_STEP_SUMMARY"
           printf 'Trusted runtime job: `%s`\n' '${{ needs.trusted_runtime.result }}' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Trusted verification job: `%s`\n' '${{ needs.verify.result }}' >> "$GITHUB_STEP_SUMMARY"
           printf 'Status JSON: `status/pr/%s.json`\n' "$PR_NUMBER" >> "$GITHUB_STEP_SUMMARY"

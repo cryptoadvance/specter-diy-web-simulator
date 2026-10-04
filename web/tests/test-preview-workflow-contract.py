@@ -28,7 +28,7 @@ class PreviewWorkflowContractTests(unittest.TestCase):
                       "head_sha", "head_ref", "source_updated_at"):
             self.assertIn(f"      {field}:", WORKFLOW)
 
-    def test_untrusted_job_has_read_only_permissions_and_no_secrets(self):
+    def test_untrusted_build_has_read_only_permissions_and_no_trusted_tests(self):
         build = job("build", "trusted_runtime")
         self.assertIn("permissions:\n      contents: read", build)
         self.assertNotIn("contents: write", build)
@@ -39,7 +39,11 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("ref: ${{ needs.validate.outputs.head_sha }}", build)
         self.assertIn("nix develop -c make disco", build)
         self.assertIn("build-browser.sh", build)
-        self.assertIn("go test ./...", build)
+        self.assertIn("test-browser-manifest.py", build)
+        for trusted_test in ("test:browser", "test:provenance", "test:compat",
+                             "test-network-policy.mjs", "test-usb-transport.mjs",
+                             "go test ./..."):
+            self.assertNotIn(trusted_test, build)
 
     def test_only_always_finalizer_has_write_permissions_and_status_publisher(self):
         finalize = job("finalize")
@@ -52,7 +56,7 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("preview-publish-${{ github.repository }}", finalize)
 
     def test_trusted_javascript_is_built_from_base_on_a_separate_runner(self):
-        runtime = job("trusted_runtime", "finalize")
+        runtime = job("trusted_runtime", "verify")
         self.assertIn("runs-on: ubuntu-latest", runtime)
         self.assertIn("contents: read", runtime)
         self.assertNotIn("contents: write", runtime)
@@ -67,15 +71,38 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn('ARTIFACTS = ("micropython.wasm", "micropython.data")',
                       (ROOT / "web/tools/package_browser.py").read_text())
         finalize = job("finalize")
-        self.assertIn("needs: [validate, build, trusted_runtime]", finalize)
+        self.assertIn("needs: [validate, build, trusted_runtime, verify]", finalize)
         self.assertIn("name: trusted-micropython-runtime", finalize)
         self.assertIn("replace_glue(extracted", (ROOT / "web/tools/publish_preview.py").read_text())
+
+        verify = job("verify", "finalize")
+        self.assertIn("needs: [validate, build, trusted_runtime]", verify)
+        self.assertIn("runs-on: ubuntu-latest", verify)
+        self.assertIn("actions: read", verify)
+        self.assertIn("contents: read", verify)
+        self.assertIn("pull-requests: read", verify)
+        self.assertNotIn("contents: write", verify)
+        self.assertNotIn("pages: write", verify)
+        self.assertNotIn("secrets.", verify)
+        self.assertNotIn("repository: ${{ needs.validate.outputs.head_repository }}", verify)
+        self.assertNotIn("requirements.txt", verify)
+        self.assertNotIn("nix develop", verify)
+        self.assertIn("python3 simulator/web/tools/publish_preview.py", verify)
+        self.assertIn("*test-browser-manifest.py", verify)
+        self.assertIn("test:browser", verify)
+        self.assertIn("test-network-policy.mjs", verify)
+        self.assertIn("test-usb-transport.mjs", verify)
+        self.assertIn("go test ./...", verify)
+        self.assertIn("needs.verify.result == 'success'", finalize)
 
     def test_live_pr_metadata_fetch_is_authenticated_in_trusted_jobs(self):
         validate = job("validate", "build")
         finalize = job("finalize")
+        verify = job("verify", "finalize")
         self.assertIn("pull-requests: read", validate)
         self.assertIn("GH_TOKEN: ${{ github.token }}", validate)
+        self.assertIn("pull-requests: read", verify)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", verify)
         self.assertIn("pull-requests: read", finalize)
         self.assertIn("GH_TOKEN: ${{ github.token }}", finalize)
         request_tool = (ROOT / "web/tools/validate_preview_request.py").read_text()
