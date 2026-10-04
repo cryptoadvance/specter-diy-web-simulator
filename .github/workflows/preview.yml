@@ -302,6 +302,7 @@ jobs:
       HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
       HEAD_REF: ${{ needs.validate.outputs.head_ref }}
       PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+      ACTION: ${{ needs.validate.outputs.action }}
       REQUEST_ID: ${{ needs.validate.outputs.request_id }}
       SOURCE_UPDATED_AT: ${{ needs.validate.outputs.source_updated_at }}
       SIMULATOR_REPOSITORY: ${{ github.repository }}

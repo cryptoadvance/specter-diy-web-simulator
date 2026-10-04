@@ -97,6 +97,7 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("actions: read", verify)
         self.assertIn("contents: read", verify)
         self.assertIn("pull-requests: read", verify)
+        self.assertIn("ACTION: ${{ needs.validate.outputs.action }}", verify)
         self.assertNotIn("contents: write", verify)
         self.assertNotIn("pages: write", verify)
         self.assertNotIn("secrets.", verify)
