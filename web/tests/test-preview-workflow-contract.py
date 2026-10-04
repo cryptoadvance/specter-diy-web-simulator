@@ -40,6 +40,19 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("nix develop -c make disco", build)
         self.assertIn("build-browser.sh", build)
         self.assertIn("test-browser-manifest.py", build)
+        self.assertLess(
+            build.index("write-browser-manifest.py"),
+            build.index("test-browser-manifest.py"),
+        )
+        self.assertLess(
+            build.index("test-browser-manifest.py"),
+            build.index("Install firmware build dependencies"),
+        )
+        browser_builder = (ROOT / "web/browser/build-browser.sh").read_text()
+        self.assertLess(
+            browser_builder.index("write-browser-manifest.py"),
+            browser_builder.index("test-browser-manifest.py"),
+        )
         for trusted_test in ("test:browser", "test:provenance", "test:compat",
                              "test-network-policy.mjs", "test-usb-transport.mjs",
                              "go test ./..."):
@@ -62,6 +75,7 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("contents: write", runtime)
         self.assertNotIn("secrets.", runtime)
         self.assertIn("ref: ${{ needs.validate.outputs.base_sha }}", runtime)
+        self.assertIn("SIMULATOR_COMMIT: ${{ github.sha }}", runtime)
         self.assertNotIn("needs.validate.outputs.head_sha", runtime)
         self.assertIn("package_trusted_runtime.py", runtime)
         self.assertNotIn("pip install", runtime)
