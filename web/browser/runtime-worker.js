@@ -6,7 +6,8 @@ let scannerActive = false;
 let program = 'wallet';
 self.screen = { width: 480, height: 800 };
 const send = (type, details = {}) => postMessage({ type, ...details });
-const workerRevision = '2026-09-15.2';
+const workerRevision = '2026-10-04.developer-inspector2';
+let inspectorEnabled = false;
 const SD_CAPACITY_BYTES = 8_000_000_000;
 const SD_ENOSPC = 51;
 let fatalReported = false;
@@ -237,10 +238,121 @@ function createCard(fs, slot) {
   fs.writeFile(`${root}/private.key`, key);
   fs.writeFile(`${root}/attempts`, new Uint8Array([10]));
 }
+function inspectFiles(fs) {
+  const files = [];
+  for (const root of program === 'mockui' ? ['/state', '/flash'] : ['/state']) {
+    for (const file of walk(fs, root)) {
+      const path = `${root}/${file.path}`;
+      // Hash every byte in bounded chunks so same-size rewrites are detectable.
+      let hash = 2166136261;
+      const stream = fs.open(path, 'r');
+      try {
+        const buffer = new Uint8Array(65536);
+        let count;
+        while ((count = fs.read(stream, buffer, 0, buffer.length)) > 0) {
+          for (let i = 0; i < count; i++) hash = Math.imul(hash ^ buffer[i], 16777619) >>> 0;
+        }
+      } finally { fs.close(stream); }
+      files.push({ path, size: file.size, hash: hash.toString(16).padStart(8, '0') });
+    }
+  }
+  return files;
+}
+function sendInspection(data, attempts = 0) {
+  try { collectInspection(data, attempts); }
+  catch (error) { send('operation-error', { operation: 'inspector-state', message: error.message || String(error) }); }
+}
+function collectInspection(data, attempts) {
+  const fs = Module.FS;
+  const statePath = '/bridge/inspector-state.json';
+  if (!inspectorEnabled) {
+    if (fs.analyzePath(statePath).exists) fs.unlink(statePath);
+    return;
+  }
+  let firmware = null;
+  if (fs.analyzePath(statePath).exists) firmware = JSON.parse(fs.readFile(statePath, { encoding: 'utf8' }));
+  if (program === 'wallet' && firmware?.requestId !== data.requestId && attempts < 40) {
+    setTimeout(() => sendInspection(data, attempts + 1), 50);
+    return;
+  }
+  const matchingFirmware = firmware?.requestId === data.requestId ? firmware : null;
+  const { requestId: ignoredFirmwareRequestId, sensitiveValues: capturedSensitiveValues, ...firmwareState } = matchingFirmware || {};
+  const sensitiveCancelled = data.includeSensitive && fs.analyzePath('/bridge/inspector-sensitive-cancelled').exists;
+  send('inspector-state', { requestId: data.requestId, files: data.includeFiles ? inspectFiles(fs) : null,
+    memoryBytes: Module.HEAPU8.buffer.byteLength,
+    firmware: matchingFirmware ? firmwareState : { error: 'Firmware metrics unavailable during this operation; refresh to retry.' },
+    sensitiveValues: data.includeSensitive ? sensitiveCancelled ? {} : capturedSensitiveValues || {} : undefined,
+    scannerActive, qrQueued: qrQueue.length,
+    sdInserted: fs.analyzePath('/bridge/sd-inserted').exists,
+    cardSlot: fs.analyzePath('/bridge/card-slot').exists ? fs.readFile('/bridge/card-slot')[0] : null });
+  if (data.includeSensitive) {
+    if (fs.analyzePath(statePath).exists) fs.unlink(statePath);
+    if (fs.analyzePath('/bridge/inspector-sensitive-cancelled').exists) fs.unlink('/bridge/inspector-sensitive-cancelled');
+  }
+}
 function handle(data) {
   const fs = Module.FS;
   try {
-    if (data.type === 'pointer') {
+    if (data.type === 'inspector-enable') {
+      const enabled = Boolean(data.enabled);
+      if (enabled !== inspectorEnabled) {
+        if (typeof Module._browser_pointer !== 'function') {
+          throw new Error('Firmware inspector bridge is unavailable in this runtime');
+        }
+        // This uses the existing pointer export's reserved sentinel values.
+        // C schedules the Python callback on MicroPython's own event loop.
+        Module._browser_pointer(-1, enabled ? 1 : 0, -1);
+      }
+      inspectorEnabled = enabled;
+      if (!inspectorEnabled) {
+        for (const path of ['/bridge/inspector-request', '/bridge/inspector-state.json',
+          '/bridge/inspector-sensitive-cancelled']) {
+          if (fs.analyzePath(path).exists) fs.unlink(path);
+        }
+      }
+    } else if (data.type.startsWith('inspector-')) {
+      if (!inspectorEnabled) throw new Error('Developer Options are disabled');
+      if (data.type === 'inspector-state') {
+        if (data.includeSensitive && fs.analyzePath('/bridge/inspector-sensitive-cancelled').exists) {
+          fs.unlink('/bridge/inspector-sensitive-cancelled');
+        }
+        fs.writeFile('/bridge/inspector-request', JSON.stringify({
+          requestId: data.requestId,
+          includeSensitive: data.includeSensitive === true,
+        }));
+        sendInspection(data);
+      } else if (data.type === 'inspector-hide-sensitive') {
+        fs.writeFile('/bridge/inspector-sensitive-cancelled', new Uint8Array([1]));
+        const requestPath = '/bridge/inspector-request';
+        if (fs.analyzePath(requestPath).exists) {
+          try {
+            const request = JSON.parse(fs.readFile(requestPath, { encoding: 'utf8' }));
+            if (request.includeSensitive) fs.unlink(requestPath);
+          } catch { fs.unlink(requestPath); }
+        }
+        const statePath = '/bridge/inspector-state.json';
+        if (fs.analyzePath(statePath).exists) {
+          try {
+            const state = JSON.parse(fs.readFile(statePath, { encoding: 'utf8' }));
+            delete state.sensitiveValues;
+            fs.writeFile(statePath, JSON.stringify(state));
+          } catch { fs.unlink(statePath); }
+        }
+      } else if (data.type === 'inspector-file') {
+        const path = data.path;
+        if (typeof path !== 'string' || !path.startsWith('/state/')) throw new Error('Invalid inspector path');
+        relativePath(path.slice(1));
+        const size = fs.stat(path).size;
+        const stream = fs.open(path, 'r');
+        const bytes = new Uint8Array(Math.min(size, 65536));
+        try { fs.read(stream, bytes, 0, bytes.length, 0); } finally { fs.close(stream); }
+        send('inspector-file', { requestId: data.requestId, path, size, bytes });
+      } else if (data.type === 'inspector-memory') {
+        const address = data.address;
+        if (!Number.isSafeInteger(address) || address < 0 || address >= Module.HEAPU8.length) throw new Error('RAM address is outside WebAssembly memory');
+        send('inspector-memory', { address, bytes: Module.HEAPU8.slice(address, address + 256) });
+      }
+    } else if (data.type === 'pointer') {
       if (Module._browser_pointer) Module._browser_pointer(data.x, data.y, data.down);
       else throw new Error('Pointer bridge unavailable');
     } else if (data.type === 'sd-insert') {

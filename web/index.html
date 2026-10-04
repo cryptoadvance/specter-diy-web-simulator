@@ -234,6 +234,23 @@
     .sim-panel a { color: var(--specter-primary); }
     .sim-panel details { margin-top: 10px; }
     .sim-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; max-height: 180px; overflow: auto; }
+    .developer-options { width:100%; max-width:760px; grid-column:1 / -1; color:var(--specter-light-secondary); font-size:13px; line-height:1.5; }
+    .developer-options > label { display:block; text-align:center; color:var(--specter-light); cursor:pointer; }
+    #developer-inspector { margin-top:12px; padding:18px; border:1px solid var(--specter-dark-secondary); border-radius:12px; background:var(--specter-dark-accent); }
+    #developer-inspector[hidden], .embedded .developer-options { display:none; }
+    #developer-inspector h2 { color:var(--specter-light); font-size:18px; }
+    #developer-inspector h3 { color:var(--specter-light); font-size:14px; margin-top:16px; }
+    #developer-inspector p { margin:8px 0; color:var(--specter-light-secondary); }
+    #developer-inspector pre { background:var(--specter-dark); padding:10px; max-height:260px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
+    #developer-inspector button, #inspector-address { border:1px solid #506070; border-radius:6px; padding:7px 10px; background:var(--specter-dark); color:var(--specter-light); font:inherit; }
+    #developer-inspector button { margin:4px 0; cursor:pointer; }
+    #developer-inspector button:hover { border-color:var(--specter-primary); }
+    #developer-inspector button:disabled { opacity:.5; cursor:wait; }
+    #developer-inspector > .inspector-sensitive-panel { margin-top:12px; padding:10px; border:1px solid var(--specter-dark-secondary); border-radius:8px; }
+    #developer-inspector > .inspector-sensitive-panel > summary { cursor:pointer; color:var(--specter-light); }
+    #inspector-files { width:100%; background:var(--specter-dark); color:var(--specter-light); margin:8px 0; }
+    .inspector-actions { display:flex; flex-wrap:wrap; gap:8px; }
+    #inspector-address { width:130px; }
     .technical-details { width:100%; max-width:380px; color:var(--specter-light-secondary); font-size:12px; line-height:1.45; }
     .technical-details summary { cursor:pointer; color:var(--specter-light-secondary); }
     .technical-details p { margin:8px 0; }
@@ -310,7 +327,7 @@
     .embedded .phone-wrapper { max-width:330px; }
     .gallery .page { display:block; width:100%; height:100%; padding:0; }
     .gallery, .gallery body { background:transparent; width:100%; height:100%; min-height:0; }
-    .gallery .warning, .gallery .device-actions, .gallery .sim-panel, .gallery .status-card { display:none; }
+    .gallery .warning, .gallery .device-actions, .gallery .sim-panel, .gallery .status-card, .gallery .developer-options { display:none; }
     .gallery .phone-wrapper { width:100%; height:100%; max-width:none; }
     .gallery .phone-wrapper .phone-mockup { display:none; }
     .virtual-host { border:1px solid #3a4d61; border-radius:10px; padding:16px; background:#182434; }
@@ -323,7 +340,7 @@
     .gallery .virtual-host { display:none; }
     .gallery #screen-overlay { left:0; top:0; width:100%; height:100%; border-radius:0; }
     @media (min-width:900px) {
-      .page { display:grid; grid-template-columns:minmax(380px, 480px) minmax(420px, 1fr); grid-template-areas:'warning warning' 'device peripherals' 'restart peripherals' 'virtual-host virtual-host' 'hardware hardware' 'demo demo' 'technical technical'; gap:16px 22px; width:100%; max-width:1180px; margin:auto; align-items:start; }
+      .page { display:grid; grid-template-columns:minmax(380px, 480px) minmax(420px, 1fr); grid-template-areas:'warning warning' 'device peripherals' 'restart peripherals' 'virtual-host virtual-host' 'hardware hardware' 'demo demo' 'developer developer'; gap:16px 22px; width:100%; max-width:1180px; margin:auto; align-items:start; }
       .warning { grid-area:warning; max-width:280px; justify-self:center; }
       .phone-wrapper { grid-area:device; }
       .device-actions { grid-area:restart; }
@@ -331,7 +348,7 @@
       .sim-panel { grid-area:peripherals; max-width:none; }
       .hardware-link { grid-area:hardware; justify-self:center; margin-top:16px; }
       .demo-import { grid-area:demo; justify-self:center; }
-      .technical-details { grid-area:technical; justify-self:center; }
+      .developer-options { grid-area:developer; justify-self:center; }
       .embedded .page { grid-template-columns:330px 380px; max-width:760px; }
       .gallery .page { display:block; max-width:none; }
     }
@@ -454,18 +471,44 @@
     </details>
   </section>
 
-  <details id="technical-details" class="technical-details">
-    <summary>Technical details</summary>
-    <p>Source repository: <a id="build-repository-link" href="#">Loading…</a></p>
-    <p id="build-context" hidden></p>
-    <p>Source commit: <a id="build-link" href="#">Loading…</a></p>
-    <p>Simulator tooling: <a id="simulator-repository-link" href="#">Loading…</a></p>
-    <p>Simulator commit: <a id="simulator-link" href="#">Loading…</a></p>
-    <p>Restart keeps simulated flash, SD and Smartcard contents in this tab. Factory reset wipes flash and keeps peripherals. Clear, eject or reset them separately.</p>
-    <button id="factory-btn">Factory reset simulated flash</button>
-    <pre id="build-details"></pre>
-    <pre id="debug-log"></pre>
-  </details>
+  <section class="developer-options" aria-label="Developer options">
+    <label><input type="checkbox" id="advanced-options" aria-controls="developer-inspector"> Developer Options</label>
+    <div id="developer-inspector" hidden>
+      <h2>Developer Inspector</h2>
+      <p>Live browser simulator memory and firmware state; this is not STM32 hardware RAM. Data stays in this tab. Use public test seeds only.</p>
+      <div class="inspector-actions"><button id="inspector-refresh" type="button">Refresh</button><button id="inspector-baseline" type="button">Take baseline</button><button id="inspector-compare" type="button">Compare to baseline</button></div>
+      <p id="inspector-status" role="status">Waiting for firmware…</p>
+      <h3>RAM &amp; firmware state</h3><pre id="inspector-state">Enable Developer Options to inspect the running simulator.</pre>
+      <h3>Named keystore objects in firmware RAM</h3>
+      <p>This shows whether known keystore objects are present. Values stay hidden until you explicitly read them.</p>
+      <pre id="inspector-objects">Waiting for firmware…</pre>
+      <details id="inspector-sensitive-panel" class="inspector-sensitive-panel">
+        <summary>Read sensitive values (test phrases only)</summary>
+        <p>This requests the live <code>keystore.mnemonic</code> object from firmware RAM. The simulator cannot distinguish a fake phrase from a real backup.</p>
+        <button id="inspector-read-sensitive" type="button">Read mnemonic from RAM</button>
+        <pre id="inspector-sensitive-values" hidden></pre>
+      </details>
+      <h3>Internal flash, RAM disk &amp; peripherals</h3>
+      <select id="inspector-files" size="7" aria-label="Simulator files"></select>
+      <pre id="inspector-content">Select a file to inspect its text and hex bytes.</pre>
+      <h3>WebAssembly RAM bytes</h3>
+      <label>Address (decimal or 0x hex) <input id="inspector-address" value="0x0" aria-label="RAM address"></label>
+      <button id="inspector-read-memory" type="button">Read 256 bytes</button><pre id="inspector-memory"></pre>
+      <h3>Changes since baseline</h3><pre id="inspector-changes">Take a baseline, use the simulator, then compare.</pre>
+      <details id="technical-details" class="technical-details">
+        <summary>Technical details</summary>
+        <p>Source repository: <a id="build-repository-link" href="#">Loading…</a></p>
+        <p id="build-context" hidden></p>
+        <p>Source commit: <a id="build-link" href="#">Loading…</a></p>
+        <p>Simulator tooling: <a id="simulator-repository-link" href="#">Loading…</a></p>
+        <p>Simulator commit: <a id="simulator-link" href="#">Loading…</a></p>
+        <p>Restart keeps simulated flash, SD and Smartcard contents in this tab. Factory reset wipes flash and keeps peripherals. Clear, eject or reset them separately.</p>
+        <button id="factory-btn" type="button">Factory reset simulated flash</button>
+        <pre id="build-details"></pre>
+        <pre id="debug-log"></pre>
+      </details>
+    </div>
+  </section>
 
 </div>
 
@@ -474,6 +517,6 @@
 </footer>
 
 <script src="./assets/jsQR-1.4.0.js"></script>
-<script type="module" src="./browser/site.js"></script>
+<script type="module" src="./browser/site.js?v=20261004-developer-inspector2"></script>
 </body>
 </html>

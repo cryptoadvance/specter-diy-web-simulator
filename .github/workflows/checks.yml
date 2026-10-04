@@ -3,6 +3,7 @@ name: Simulator checks
 on:
   pull_request:
   push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -12,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -34,3 +37,50 @@ jobs:
         run: |
           node web/tests/test-demo-data.mjs
           node web/tests/test-build-provenance.mjs
+      - name: Install browser build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential pkg-config libffi-dev libreadline-dev
+      - uses: actions/checkout@v4
+        with:
+          repository: cryptoadvance/specter-diy
+          ref: master
+          path: specter-diy
+          submodules: recursive
+          persist-credentials: false
+      - name: Verify browser freeze inputs
+        run: python3 web/tests/test-browser-manifest.py "$GITHUB_WORKSPACE/specter-diy"
+      - name: Install Emscripten 3.1.74
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install 3.1.74
+          "$RUNNER_TEMP/emsdk/emsdk" activate 3.1.74
+      - name: Build the real Specter DIY WebAssembly runtime
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          simulator_commit="$(git rev-parse HEAD)"
+          source_commit="$(git -C "$GITHUB_WORKSPACE/specter-diy" rev-parse HEAD)"
+          SPECTER_SRC="$GITHUB_WORKSPACE/specter-diy" \
+            SPECTER_SOURCE_REPOSITORY=cryptoadvance/specter-diy \
+            SIMULATOR_REPOSITORY=cryptoadvance/specter-diy-web-simulator \
+            SIMULATOR_COMMIT="$simulator_commit" \
+            bash web/browser/build-browser.sh
+          EXPECTED_SHA="$source_commit" \
+            SPECTER_SOURCE_REPOSITORY=cryptoadvance/specter-diy \
+            SIMULATOR_REPOSITORY=cryptoadvance/specter-diy-web-simulator \
+            SIMULATOR_COMMIT="$simulator_commit" \
+            python3 web/browser/verify_build.py
+      - name: Install Chromium for browser UI tests
+        run: npx --prefix web playwright install --with-deps chromium
+      - name: Test inspector UI and current real firmware runtime
+        run: |
+          python3 -m http.server 8765 --directory web >/tmp/specter-runtime-test-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8765/ >/dev/null; then break; fi
+            sleep 1
+          done
+          CI=true TEST_BASE_URL=http://127.0.0.1:8765/ node web/tests/test-inspector.mjs
+          CI=true TEST_BASE_URL=http://127.0.0.1:8765/ node web/tests/test-network-policy.mjs
+          CI=true TEST_BASE_URL=http://127.0.0.1:8765/ node web/tests/test-site.mjs

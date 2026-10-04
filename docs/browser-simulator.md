@@ -233,3 +233,31 @@ general-purpose repository checks continue their established version-tag
 convention. GitHub App tokens are an optional organization preference; there
 is no custom server, database, callback credential, or second wallet logic
 implementation.
+
+## Developer Options
+
+The optional **Developer Options** panel inspects browser simulator state, flash
+and peripheral files, and the WebAssembly memory buffer. At normal startup its
+firmware hook only retains the active device reference; it creates no inspector
+task and performs no memory or filesystem reads. Enabling Developer Options
+starts the inspector task, and disabling it cancels that task and clears pending
+requests and displayed state. Firmware metadata reports only whether
+`keystore.mnemonic` is present. It does not tokenize or encode the phrase; the
+mnemonic value is read and transferred only after the explicit **Read mnemonic
+from RAM** action. Closing the sensitive-values panel or disabling Developer
+Options clears the displayed value and its temporary worker-side copy. This is a
+debugging view into the browser build, not hardware RAM, and it must only be used
+with public test phrases.
+
+CI runs both the mocked inspector UI test and an integration test that builds the
+current Specter-DIY WebAssembly runtime from source, then verifies inspection
+activation, shutdown, request-ID-safe baseline comparison, and normal restart
+with real firmware.
+
+## Browser compatibility
+
+GitHub Pages does not provide COOP/COEP response headers. This build does not
+require SharedArrayBuffer. The DIY display has a Canvas pixel bridge for
+browsers without transferable OffscreenCanvas. Chromium is covered by CI;
+Firefox and WebKit should be checked when changing the display bridge. Test
+on physical mobile devices and hardware before any release claim.
