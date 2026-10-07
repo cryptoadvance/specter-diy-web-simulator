@@ -389,7 +389,7 @@ jobs:
           SIMULATOR_COMMIT: ${{ github.sha }}
           SIMULATOR_REPOSITORY: ${{ github.repository }}
         run: |
-          python3 -c 'from pathlib import Path; import os; from simulator.web.browser.verify_build import verify; verify(Path(os.environ["PAGES_DIR"]) / "pr" / os.environ["PR_NUMBER"], os.environ["EXPECTED_SHA"], os.environ["SPECTER_SOURCE_REPOSITORY"], os.environ["SIMULATOR_COMMIT"], os.environ["SIMULATOR_REPOSITORY"])'
+          python3 -c 'from pathlib import Path; import os; from simulator.web.browser.verify_build import verify; verify(Path(os.environ["PAGES_DIR"]) / "pr" / os.environ["PR_NUMBER"] / os.environ["EXPECTED_SHA"], os.environ["EXPECTED_SHA"], os.environ["SPECTER_SOURCE_REPOSITORY"], os.environ["SIMULATOR_COMMIT"], os.environ["SIMULATOR_REPOSITORY"])'
       - name: Run trusted Web Simulator Python and provenance tests
         env:
           EXPECTED_SHA: ${{ needs.validate.outputs.head_sha }}
@@ -405,7 +405,7 @@ jobs:
           done
       - name: Serve the composed preview for browser and transport tests
         run: |
-          python3 -m http.server 8765 --directory "$PAGES_DIR/pr/$PR_NUMBER" > /tmp/specter-browser.log 2>&1 &
+          python3 -m http.server 8765 --directory "$PAGES_DIR/pr/$PR_NUMBER/$HEAD_SHA" > /tmp/specter-browser.log 2>&1 &
           echo $! > /tmp/specter-browser.pid
           for attempt in $(seq 1 30); do curl --fail --silent "$TEST_BASE_URL" >/dev/null && break; sleep 1; done
       - name: Run browser, compatibility, and network policy tests
@@ -418,7 +418,7 @@ jobs:
         run: |
           usb_site="$RUNNER_TEMP/specter-usb-preview"
           mkdir -p "$usb_site"
-          cp -a "$PAGES_DIR/pr/$PR_NUMBER/." "$usb_site/"
+          cp -a "$PAGES_DIR/pr/$PR_NUMBER/$HEAD_SHA/." "$usb_site/"
           cp simulator/web/index.html "$usb_site/index.html"
           python3 -m http.server 8766 --directory "$usb_site" > /tmp/specter-usb-site.log 2>&1 &
           for attempt in $(seq 1 30); do curl --fail --silent http://127.0.0.1:8766/ >/dev/null && break; sleep 1; done
@@ -430,7 +430,7 @@ jobs:
           TEST_BASE_URL=http://127.0.0.1:8766/ node simulator/web/tests/test-usb-transport.mjs
 
   finalize:
-    name: Publish current preview state and result
+    name: Publish immutable preview state and PR result
     needs: [validate, build, trusted_runtime, verify]
     if: ${{ always() && needs.validate.result == 'success' }}
     runs-on: ubuntu-latest
@@ -539,6 +539,37 @@ jobs:
         if: steps.publish.outcome == 'success'
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+      - name: Create a short-lived Specter PR comment token
+        if: needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy' && steps.publish.outputs.applied == 'true' && steps.deployment.outcome == 'success'
+        id: specter-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.SPECTER_PREVIEW_APP_ID }}
+          private-key: ${{ secrets.SPECTER_PREVIEW_APP_PRIVATE_KEY }}
+          owner: cryptoadvance
+          repositories: specter-diy
+          permission-pull-requests: write
+      - name: Revalidate and repost the single Specter PR preview comment
+        id: report
+        if: needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy' && steps.publish.outputs.applied == 'true' && steps.deployment.outcome == 'success'
+        env:
+          REQUEST_ID: ${{ needs.validate.outputs.request_id }}
+          ACTION: ${{ needs.validate.outputs.action }}
+          BASE_REPOSITORY: ${{ needs.validate.outputs.base_repository }}
+          BASE_SHA: ${{ needs.validate.outputs.base_sha }}
+          BASE_REF: ${{ needs.validate.outputs.base_ref }}
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+          HEAD_REPOSITORY: ${{ needs.validate.outputs.head_repository }}
+          HEAD_SHA: ${{ needs.validate.outputs.head_sha }}
+          HEAD_REF: ${{ needs.validate.outputs.head_ref }}
+          SOURCE_UPDATED_AT: ${{ needs.validate.outputs.source_updated_at }}
+          SIMULATOR_REPOSITORY: ${{ github.repository }}
+          SIMULATOR_SHA: ${{ github.sha }}
+          BUILD_RESULT: ${{ steps.publish.outputs.status }}
+          PAGES_DIR: ${{ github.workspace }}/pages
+          SPECTER_PREVIEW_APP_TOKEN: ${{ steps.specter-app-token.outputs.token }}
+          SPECTER_PREVIEW_APP_SLUG: ${{ steps.specter-app-token.outputs.app-slug }}
+        run: python3 simulator/web/tools/report_preview.py
       - name: Add finalization result to the workflow summary
         if: always()
         run: |
@@ -547,4 +578,5 @@ jobs:
           printf 'Build job: `%s`\n' '${{ needs.build.result }}' >> "$GITHUB_STEP_SUMMARY"
           printf 'Trusted runtime job: `%s`\n' '${{ needs.trusted_runtime.result }}' >> "$GITHUB_STEP_SUMMARY"
           printf 'Trusted verification job: `%s`\n' '${{ needs.verify.result }}' >> "$GITHUB_STEP_SUMMARY"
-          printf 'Status JSON: `status/pr/%s.json`\n' "$PR_NUMBER" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Publication result: `%s`\n' '${{ steps.publish.outputs.status }}' >> "$GITHUB_STEP_SUMMARY"
+          printf 'PR comment report: `%s`\n' '${{ steps.report.outcome }}' >> "$GITHUB_STEP_SUMMARY"

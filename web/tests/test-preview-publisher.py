@@ -211,8 +211,9 @@ class PreviewPublisherTests(unittest.TestCase):
 
     def test_fork_source_publishes_correct_preview_firmware_and_status(self):
         result = self.apply(request())
-        preview = self.pages / "pr/19"
-        self.assertEqual(result, {"applied": True, "status": "success"})
+        preview = self.pages / f"pr/19/{SHA}"
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["applied"])
         published_html = (preview / "index.html").read_text(encoding="utf-8")
         self.assertIn("connect-src 'self'", published_html)
         self.assertNotIn("127.0.0.1:8788", published_html)
@@ -224,14 +225,15 @@ class PreviewPublisherTests(unittest.TestCase):
         status = json.loads((self.pages / "status/pr/19.json").read_text())
         self.assertEqual(status["request_id"], request()["request_id"])
         self.assertEqual(status["source_repository"], SOURCE)
-        self.assertEqual(status["preview_url"], "https://alice.github.io/specter-diy-web-simulator/pr/19/")
+        self.assertEqual(status["preview_url"], f"https://alice.github.io/specter-diy-web-simulator/pr/19/{SHA}/")
+        self.assertEqual(status["successful_previews"][0]["head_sha"], SHA)
         self.assertIn("artifacts/123", status["firmware_url"])
 
     def test_pr_generated_javascript_is_replaced_by_trusted_runtime(self):
         req = request()
         result = self.apply(req)
         self.assertEqual(result["status"], "success")
-        build = self.pages / f"pr/19/builds/{SOURCE}/{SHA}"
+        build = self.pages / f"pr/19/{SHA}/builds/{SOURCE}/{SHA}"
         js = (build / "micropython.js").read_bytes()
         self.assertEqual(js, b"trusted-runtime-js")
         info = json.loads((build / "build-info.json").read_text(encoding="utf-8"))
@@ -248,7 +250,7 @@ class PreviewPublisherTests(unittest.TestCase):
                 shutil.rmtree(self.pages / "status", ignore_errors=True)
                 result = self.apply(request(), runtime_tamper=tamper)
                 self.assertEqual(result["status"], "failure")
-                self.assertFalse((self.pages / "pr/19").exists())
+                self.assertFalse((self.pages / f"pr/19/{request()['head_sha']}").exists())
 
     def test_malicious_browser_archive_paths_symlinks_and_executables_fail_closed(self):
         req = request()
@@ -260,8 +262,9 @@ class PreviewPublisherTests(unittest.TestCase):
                 shutil.rmtree(self.pages / "status", ignore_errors=True)
                 if (self.pages / "pr/19").exists():
                     shutil.rmtree(self.pages / "pr/19")
-                (self.pages / "pr/19").mkdir(parents=True)
-                (self.pages / "pr/19/old.html").write_text("stale")
+                immutable = self.pages / f"pr/19/{SHA}"
+                immutable.mkdir(parents=True)
+                (immutable / "old.html").write_text("last successful preview")
                 self.apply_malicious_archive(req, kind)
                 result = publisher.publish(
                     req, self.pages, self.archive, self.firmware, self.runtime, self.trusted, "success",
@@ -270,7 +273,7 @@ class PreviewPublisherTests(unittest.TestCase):
                     "token", lambda *_: live_pr(req),
                 )
                 self.assertEqual(result["status"], "failure")
-                self.assertFalse((self.pages / "pr/19").exists())
+                self.assertEqual((immutable / "old.html").read_text(), "last successful preview")
 
     def apply_malicious_archive(self, req, kind):
         browser_archive(self.archive, req, "untrusted-js" if kind == "untrusted-js" else None)
@@ -342,18 +345,112 @@ class PreviewPublisherTests(unittest.TestCase):
                 )
                 self.assertEqual(result["status"], "failure")
 
-    def test_newer_failure_removes_previous_executable_preview(self):
+    def test_failed_newer_build_keeps_latest_and_previous_successes_online(self):
+        first = request()
+        self.assertEqual(self.apply(first)["status"], "success")
+        second = request(sha="c" * 40, updated="2026-10-01T12:00:00.000000Z", run_id=102)
+        third = request(sha="d" * 40, updated="2026-10-02T12:00:00.000000Z", run_id=103)
+        browser_archive(self.archive, second)
+        firmware_artifact(self.firmware, second)
+        result = publisher.publish(
+            second, self.pages, self.archive, self.firmware, self.runtime, self.trusted, "success",
+            SERVICE, SIM_SHA, 202, 1,
+            f"https://github.com/{SERVICE}/actions/runs/202/artifacts/123",
+            "token", lambda *_: live_pr(second),
+        )
+        self.assertEqual(result["status"], "success")
+        result = publisher.publish(
+            third, self.pages, self.archive, self.firmware, self.runtime, self.trusted, "failure",
+            SERVICE, SIM_SHA, 203, 1, "", "token", lambda *_: live_pr(third),
+        )
+        self.assertEqual(result["status"], "failure")
+        for successful_sha in (SHA, second["head_sha"]):
+            self.assertTrue((self.pages / f"pr/19/{successful_sha}/index.html").is_file())
+        self.assertFalse((self.pages / f"pr/19/{third['head_sha']}").exists())
+        state = json.loads((self.pages / ".preview-state/pr/19.json").read_text())
+        self.assertEqual([entry["head_sha"] for entry in state["successful_previews"]],
+                         [second["head_sha"], SHA])
+        status = json.loads((self.pages / "status/pr/19.json").read_text())
+        self.assertEqual(status["status"], "failure")
+        self.assertEqual(status["preview_url"], state["successful_previews"][0]["preview_url"])
+
+    def test_successful_c_keeps_immutable_a_and_promotes_b_to_previous(self):
+        a = request()
+        self.apply(a)
+        b = request(sha="c" * 40, updated="2026-10-01T12:00:00.000000Z", run_id=102)
+        browser_archive(self.archive, b)
+        firmware_artifact(self.firmware, b)
+        publisher.publish(b, self.pages, self.archive, self.firmware, self.runtime, self.trusted,
+                          "success", SERVICE, SIM_SHA, 202, 1,
+                          f"https://github.com/{SERVICE}/actions/runs/202/artifacts/123",
+                          "token", lambda *_: live_pr(b))
+        c = request(sha="d" * 40, updated="2026-10-02T12:00:00.000000Z", run_id=103)
+        browser_archive(self.archive, c)
+        firmware_artifact(self.firmware, c)
+        publisher.publish(c, self.pages, self.archive, self.firmware, self.runtime, self.trusted,
+                          "success", SERVICE, SIM_SHA, 203, 1,
+                          f"https://github.com/{SERVICE}/actions/runs/203/artifacts/123",
+                          "token", lambda *_: live_pr(c))
+        state = json.loads((self.pages / ".preview-state/pr/19.json").read_text())
+        self.assertEqual([item["head_sha"] for item in state["successful_previews"]],
+                         [c["head_sha"], b["head_sha"]])
+        for sha in (a["head_sha"], b["head_sha"], c["head_sha"]):
+            self.assertTrue((self.pages / f"pr/19/{sha}/index.html").is_file())
+
+    def test_existing_commit_url_is_never_replaced_on_a_repeat_build(self):
+        first = request(run_id=100)
+        self.assertEqual(self.apply(first, run_id=101)["status"], "success")
+        preview = self.pages / f"pr/19/{SHA}"
+        original = (preview / "index.html").read_bytes()
+        (self.trusted / "index.html").write_text("changed trusted shell", encoding="utf-8")
+        retry = request(run_id=101)
+        browser_archive(self.archive, retry)
+        firmware_artifact(self.firmware, retry)
+        result = publisher.publish(
+            retry, self.pages, self.archive, self.firmware, self.runtime, self.trusted, "success",
+            SERVICE, SIM_SHA, 102, 1,
+            f"https://github.com/{SERVICE}/actions/runs/102/artifacts/123",
+            "token", lambda *_: live_pr(retry),
+        )
+        self.assertEqual(result["status"], "failure")
+        self.assertEqual((preview / "index.html").read_bytes(), original)
+
+    def test_first_new_layout_migrates_a_verified_legacy_preview_to_its_sha_url(self):
         old = request()
-        (self.pages / "pr/19").mkdir(parents=True)
-        (self.pages / "pr/19/index.html").write_text("old successful preview")
+        preview = self.pages / "pr/19"
+        build = preview / f"builds/{SOURCE}/{SHA}"
+        build.mkdir(parents=True)
+        (preview / "index.html").write_text("old successful browser")
+        (build / "build-info.json").write_text(json.dumps({
+            "source": {"repository": SOURCE, "commit": SHA},
+            "simulator": {"repository": SERVICE, "commit": SIM_SHA},
+        }))
+        old_state = {
+            "latest_source_updated_at": old["source_updated_at"],
+            "latest_source_sha": SHA,
+            "latest_request_id": old["request_id"],
+            "latest_action": "build",
+            "workflow_run_id": 101,
+            "run_attempt": 1,
+            "status": "success",
+        }
+        publisher._write_json(self.pages, self.pages / ".preview-state/pr/19.json", old_state)
+        publisher._write_json(self.pages, self.pages / "status/pr/19.json", {
+            "status": "success", "request_id": old["request_id"], "source_sha": SHA,
+            "source_repository": SOURCE,
+            "preview_url": "https://alice.github.io/specter-diy-web-simulator/pr/19/",
+            "firmware_url": f"https://github.com/{SERVICE}/actions/runs/101/artifacts/123",
+            "run_url": f"https://github.com/{SERVICE}/actions/runs/101",
+        })
         newer = request(sha="c" * 40, updated="2026-10-01T12:00:00.000000Z", run_id=102)
         result = publisher.publish(
             newer, self.pages, self.archive, self.firmware, self.runtime, self.trusted, "failure",
             SERVICE, SIM_SHA, 202, 1, "", "token", lambda *_: live_pr(newer),
         )
         self.assertEqual(result["status"], "failure")
-        self.assertFalse((self.pages / "pr/19").exists())
-        self.assertEqual(json.loads((self.pages / "status/pr/19.json").read_text())["status"], "failure")
+        self.assertEqual((self.pages / f"pr/19/{SHA}/index.html").read_text(), "old successful browser")
+        state = json.loads((self.pages / ".preview-state/pr/19.json").read_text())
+        self.assertEqual(state["successful_previews"][0]["head_sha"], SHA)
 
     def test_old_completion_cannot_overwrite_newer_success_or_close_tombstone(self):
         newest = request(sha="c" * 40, updated="2026-10-01T12:00:00.000000Z", run_id=102)
@@ -363,7 +460,7 @@ class PreviewPublisherTests(unittest.TestCase):
                           "success", SERVICE, SIM_SHA, 202, 1,
                           f"https://github.com/{SERVICE}/actions/runs/202/artifacts/123",
                           "token", lambda *_: live_pr(newest))
-        preview_file = self.pages / "pr/19/index.html"
+        preview_file = self.pages / f"pr/19/{newest['head_sha']}/index.html"
         self.assertTrue(preview_file.is_file())
         older = request(sha=SHA, updated=UPDATED, run_id=101)
         before = (self.pages / "status/pr/19.json").read_text()
@@ -374,15 +471,19 @@ class PreviewPublisherTests(unittest.TestCase):
 
         closed = request(sha="c" * 40, updated="2026-10-02T12:00:00.000000Z",
                          action="delete", run_id=103)
+        (self.pages / "pr/19/a" / "index.html").parent.mkdir(parents=True)
+        (self.pages / "pr/19/a" / "index.html").write_text("older immutable preview")
         deleted = publisher.publish(closed, self.pages, self.archive, self.firmware,
                                     self.runtime, self.trusted, "deleted", SERVICE, SIM_SHA,
                                     203, 1, "", "token", lambda *_: live_pr(closed, "closed"))
         self.assertEqual(deleted["status"], "deleted")
         self.assertFalse((self.pages / "pr/19").exists())
+        self.assertFalse((self.pages / "status/pr/19.json").exists())
         old_again = self.apply(older, run_id=101)
         self.assertEqual(old_again["status"], "stale")
         state = json.loads((self.pages / ".preview-state/pr/19.json").read_text())
         self.assertEqual(state["latest_action"], "delete")
+        self.assertEqual(state["successful_previews"], [])
 
     def test_equal_event_timestamp_uses_remote_run_order_and_other_prs_survive(self):
         preserved = self.pages / "pr/99"

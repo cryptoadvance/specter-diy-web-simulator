@@ -58,7 +58,7 @@ class PreviewWorkflowContractTests(unittest.TestCase):
                              "go test ./..."):
             self.assertNotIn(trusted_test, build)
 
-    def test_only_always_finalizer_has_write_permissions_and_status_publisher(self):
+    def test_only_always_finalizer_publishes_and_reports_through_narrow_app_token(self):
         finalize = job("finalize")
         self.assertIn("always()", finalize)
         self.assertIn("contents: write", finalize)
@@ -67,6 +67,30 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("python3 simulator/web/tools/publish_preview.py", finalize)
         self.assertIn("actions/deploy-pages@", finalize)
         self.assertIn("preview-publish-${{ github.repository }}", finalize)
+        self.assertIn("actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1", finalize)
+        self.assertIn("permission-pull-requests: write", finalize)
+        self.assertIn("repositories: specter-diy", finalize)
+        self.assertIn("owner: cryptoadvance", finalize)
+        self.assertIn("needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy'", finalize)
+        self.assertIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", finalize)
+        self.assertIn("python3 simulator/web/tools/report_preview.py", finalize)
+        self.assertNotIn("issues: write", WORKFLOW)
+        self.assertNotRegex(WORKFLOW, re.compile(r"^      pull-requests: write$", re.MULTILINE))
+        self.assertNotIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", job("build", "trusted_runtime"))
+        self.assertNotIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", job("trusted_runtime", "verify"))
+        self.assertNotIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", job("verify", "finalize"))
+        self.assertNotIn("repository: ${{ needs.validate.outputs.head_repository }}", finalize)
+        self.assertNotIn("nix develop", finalize)
+        self.assertNotIn("npm ", finalize)
+        self.assertNotIn("node ", finalize)
+        publisher_source = (ROOT / "web/tools/publish_preview.py").read_text()
+        self.assertNotIn("subprocess", publisher_source)
+        self.assertNotIn("os.system", publisher_source)
+        reporter = (ROOT / "web/tools/report_preview.py").read_text()
+        self.assertIn('MARKER = "<!-- specter-web-simulator-preview -->"', reporter)
+        self.assertIn("managed_comments(comments, expected_login)", reporter)
+        self.assertIn('request_fn("DELETE",', reporter)
+        self.assertIn('request_fn("POST",', reporter)
 
     def test_trusted_javascript_is_built_from_base_on_a_separate_runner(self):
         runtime = job("trusted_runtime", "verify")
@@ -175,6 +199,19 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         pin = (ROOT / ".preview-config/virtual-host-commit").read_text().strip()
         self.assertEqual(pin, "3cf3ecd58a97da0f2cc4b7586ca33abf02f68372")
         self.assertIn(f"ref: {pin}", WORKFLOW)
+
+    def test_preview_urls_are_per_commit_and_failed_builds_preserve_success_history(self):
+        publisher = (ROOT / "web/tools/publish_preview.py").read_text()
+        self.assertIn('pages / "pr" / str(request["pr_number"]) / request["head_sha"]', publisher)
+        self.assertIn('"successful_previews": [] if effective == "deleted" else successful', publisher)
+        self.assertIn('"latest_run_url": run_url', publisher)
+        self.assertIn("PAGES_DIR", WORKFLOW)
+        self.assertIn('os.environ["PR_NUMBER"] / os.environ["EXPECTED_SHA"]', WORKFLOW)
+        self.assertIn('"$PAGES_DIR/pr/$PR_NUMBER/$HEAD_SHA"', WORKFLOW)
+        self.assertIn("workflow_run_id", publisher)
+        staging = (ROOT / "web/tools/stage_pages_site.py").read_text()
+        self.assertIn('("pr", "status")', staging)
+        self.assertNotIn(".preview-state", staging)
 
 
 if __name__ == "__main__":

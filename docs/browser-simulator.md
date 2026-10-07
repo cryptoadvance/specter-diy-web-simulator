@@ -7,23 +7,21 @@ does not contain a second wallet implementation.
 
 ```text
 specter-diy PR event
-  └─ trusted dispatcher ── workflow_dispatch + exact PR metadata ──┐
-                                                                  ▼
-                                              specter-diy-web-simulator
-                                                ├─ validate live PR
-                                                ├─ untrusted runner: firmware + WASM/data + tests
-                                                ├─ fresh trusted runner: JS from exact base SHA
-                                                ├─ finalizer: validate and combine artifacts
-                                                ├─ update Pages preview + state
-                                                └─ publish status/pr/<N>.json
-                                                                  │
-                           Specter polls status + updates one PR comment ◀─┘
+  └─ short trusted dispatcher ── workflow_dispatch + exact PR metadata ──┐
+                                                                         ▼
+                                                     specter-diy-web-simulator
+                                                       ├─ validate live PR
+                                                       ├─ untrusted runner: firmware + WASM/data + tests
+                                                       ├─ fresh trusted runner: JS from exact base SHA
+                                                       ├─ finalizer: validate and combine artifacts
+                                                       ├─ publish immutable Pages preview + trusted state
+                                                       └─ GitHub App reposts the final PR comment
 ```
 
-The official preview for PR 45 is hosted by this repository at
-`https://cryptoadvance.github.io/specter-diy-web-simulator/pr/45/`. A paired
-fork uses the matching owner, for example
-`https://alice.github.io/specter-diy-web-simulator/pr/12/`.
+The official preview URL for a PR includes its full source commit SHA, for
+example `https://cryptoadvance.github.io/specter-diy-web-simulator/pr/45/<sha>/`.
+A paired fork uses the matching owner, for example
+`https://alice.github.io/specter-diy-web-simulator/pr/12/<sha>/`.
 
 **Experimental development build. Never enter a real seed phrase or use real
 funds.** The firmware and browser build are not official releases. A preview
@@ -153,11 +151,10 @@ ID, base repository and exact base SHA/ref, head repository, PR number, exact
 head SHA/ref, action, and source `updated_at`. Closing a PR sends
 `action=delete`.
 
-The dispatcher polls for up to 210 minutes. This covers the paired service's
-5-minute validation, 180-minute build, and 10-minute finalizer, with a short
-buffer; the caller workflow allows 240 minutes. The service cancels an older
-build for the same PR when a newer request arrives, and its persistent state
-prevents a stale finalizer from replacing a newer result.
+After a successful dispatch, the Specter workflow exits. It does not wait for
+the firmware or browser build. The simulator finalizer validates the live PR
+again before publication and before reporting. Its persistent state prevents a
+stale finalizer from replacing a newer result or comment.
 
 This workflow uses `pull_request_target`. Repository or organization Actions
 policy must permit that event for public repositories. A repository or
@@ -167,10 +164,33 @@ November 2, 2026 enforcement date.
 The Web Simulator validates the paired base repository and compares the request
 to the live GitHub PR before building. Build requests must match an open PR's
 base, head repository, branch, number, and exact SHA. The source checkout is by
-SHA, including submodules. The caller polls the public status JSON and accepts
-only a matching request ID, PR number, and source SHA. It uses its own local
-`GITHUB_TOKEN` to update one comment; this service never receives a credential
-that can modify Specter DIY.
+SHA, including submodules. The trusted finalizer validates the exact request,
+run identity, monotonic state, and live PR again before it reports the result.
+
+The trusted simulator finalizer uses a short-lived GitHub App installation
+token to manage one marked PR conversation comment. Install the App on **only**
+`cryptoadvance/specter-diy` and grant only the **Pull requests: Read and write**
+repository permission. For each accepted result, it deletes only comments from
+that App identity containing `<!-- specter-web-simulator-preview -->`, then
+posts the refreshed comment at the bottom. A closed PR removes all its previews
+and matching App comments.
+
+Configure these Web Simulator repository settings:
+
+- Repository variable `SPECTER_PREVIEW_APP_ID`: the GitHub App ID.
+- Repository secret `SPECTER_PREVIEW_APP_PRIVATE_KEY`: the App private key.
+
+The workflow resolves the installation ID and scopes each short-lived token to
+the single repository; it uses the App slug returned by the token action to
+verify the expected comment author. The App needs no Contents, Actions, Issues,
+or Administration permission. Keep `WEB_SIMULATOR_DISPATCH_TOKEN` separately in
+the Specter DIY repository; it only dispatches the Web Simulator workflow and
+is never exposed to the untrusted build job.
+
+Fork-source PRs targeting `cryptoadvance/specter-diy` use this App reporter and
+remain supported. A paired Web Simulator fork can still build and publish its
+own previews, but it does not receive the upstream App credential and therefore
+does not write comments on its forked Specter repository.
 
 The service uses its workflow token with `pull-requests: read` to validate the
 live PR. Published PR pages receive a stricter copy of the trusted shell's
@@ -187,15 +207,15 @@ only when the visitor expands the panel (or explicitly enables
 `?virtual-host=1`). PR previews keep the panel visible but explain that the local
 connection is disabled there; their stricter CSP remains in force.
 
-Several PR previews coexist in `/pr/<N>/`. The trusted publisher serializes
-updates and keeps `.preview-state/pr/<N>.json` on its persistent `gh-pages`
-branch separately from the public preview. The state records the latest source
-timestamp, SHA, request, action, and result. Older requests and late builds
-cannot replace a newer preview. A close event removes the preview but leaves a
-tombstone. A failed or cancelled build for the current source removes the old
-executable preview and publishes a failure status instead of leaving an older
-commit looking current. Every accepted request publishes
-`status/pr/<N>.json` through GitHub Pages.
+Successful PR previews use immutable paths `/pr/<N>/<full-head-sha>/`; a later
+commit never replaces an earlier commit's URL. The trusted publisher keeps the
+two most recent successful previews and their firmware/log links in
+`.preview-state/pr/<N>.json` on its persistent `gh-pages` branch. A failed or
+cancelled build advances the stale-request guard and reports the failure while
+preserving successful preview directories and their history. Older requests
+cannot replace newer state. Closing a PR removes every public preview under
+`/pr/<N>/`, clears its success history, and leaves a minimal tombstone to reject
+delayed requests. The state is excluded from public Pages output.
 
 The untrusted job builds firmware and WebAssembly from the exact PR head SHA.
 Its browser archive contains only `micropython.wasm` and `micropython.data`;
@@ -238,9 +258,8 @@ trust trade-off in mind.
 
 The preview workflow pins third-party actions to immutable commit SHAs. Existing
 general-purpose repository checks continue their established version-tag
-convention. GitHub App tokens are an optional organization preference; there
-is no custom server, database, callback credential, or second wallet logic
-implementation.
+convention. There is no custom server, database, callback workflow, or second
+wallet logic implementation.
 
 ## Developer Options
 

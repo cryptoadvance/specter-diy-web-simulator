@@ -26,6 +26,7 @@ FIRMWARE_FILES = ("specter-diy.bin", "specter-diy.hex")
 MAX_BROWSER_ARCHIVE = 160 * 1024 * 1024
 MAX_FIRMWARE_FILE = 32 * 1024 * 1024
 MAX_RUNTIME_SIZE = 20_000_000
+REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 
 def _json_object(data: bytes | str) -> dict:
@@ -416,6 +417,92 @@ def _valid_firmware_url(value: str, repository: str, run_id: int) -> str:
     return value
 
 
+def _tree_digest(root: Path) -> str:
+    digest = sha256()
+    _assert_no_symlinks(root)
+    for path in sorted((item for item in root.rglob("*") if item.is_file()),
+                       key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix().encode()
+        data = path.read_bytes()
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
+
+
+def _legacy_success(pages: Path, state: dict | None, pr_number: int,
+                    simulator_repository: str, site_base: str) -> dict | None:
+    """Adopt a previously verified mutable preview once, without rewriting it."""
+    if not state or state.get("status") != "success" or state.get("latest_action") != "build":
+        return None
+    sha = state.get("latest_source_sha", "")
+    request_id = state.get("latest_request_id", "")
+    if not re.fullmatch(r"[a-f0-9]{40}", sha) or not isinstance(request_id, str):
+        return None
+    old = pages / "pr" / str(pr_number)
+    if not old.is_dir() or old.is_symlink():
+        return None
+    _assert_no_symlinks(old)
+    records = []
+    builds = old / "builds"
+    if not builds.is_dir():
+        return None
+    for info_path in builds.glob(f"*/*/{sha}/build-info.json"):
+        info = _json_object(info_path.read_bytes())
+        source = info.get("source") or {}
+        repository = source.get("repository", "")
+        simulator = info.get("simulator") or {}
+        if (not REPOSITORY_RE.fullmatch(repository) or source.get("commit") != sha or
+                not re.fullmatch(r"[a-f0-9]{40}", simulator.get("commit", "")) or
+                not info_path.is_relative_to(builds / repository / sha)):
+            continue
+        records.append((repository, simulator["commit"]))
+    if len(set(records)) != 1:
+        return None
+    source_repository, simulator_sha = records[0]
+    legacy_status_path = pages / "status" / "pr" / f"{pr_number}.json"
+    try:
+        legacy_status = _json_object(legacy_status_path.read_bytes())
+        legacy_run_url = legacy_status["run_url"]
+        legacy_run = re.fullmatch(
+            rf"https://github\.com/{re.escape(simulator_repository)}/actions/runs/([1-9][0-9]*)",
+            legacy_run_url,
+        )
+        if (legacy_status.get("status") != "success" or
+                legacy_status.get("request_id") != request_id or
+                legacy_status.get("source_sha") != sha or
+                legacy_status.get("source_repository", "").lower() != source_repository.lower() or
+                legacy_status.get("preview_url") != site_base + f"pr/{pr_number}/" or
+                not legacy_run or int(legacy_run.group(1)) != int(state.get("workflow_run_id", 0))):
+            return None
+        run_id = int(legacy_run.group(1))
+        firmware_url = _valid_firmware_url(
+            legacy_status.get("firmware_url", ""), simulator_repository, run_id
+        )
+        run_attempt = int(state.get("run_attempt", 0))
+        if run_attempt <= 0:
+            return None
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    immutable = pages / "pr" / str(pr_number) / sha
+    _ensure_safe_parent(pages, immutable.parent)
+    if immutable.exists():
+        return None
+    shutil.copytree(old, immutable, symlinks=False)
+    return {
+        "head_sha": sha,
+        "request_id": request_id,
+        "workflow_run_id": run_id,
+        "run_attempt": run_attempt,
+        "simulator_sha": simulator_sha,
+        "preview_url": site_base + f"pr/{pr_number}/{sha}/",
+        "firmware_url": firmware_url,
+        "run_url": legacy_run_url,
+        "source_repository": source_repository,
+    }
+
+
 def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Path,
             trusted_runtime_dir: Path, trusted_web: Path, result: str, simulator_repository: str,
             simulator_sha: str, run_id: int, run_attempt: int, firmware_url: str,
@@ -439,8 +526,22 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
         return {"applied": False, "status": "stale"}
 
     effective = result
+    owner, repository_name = os.environ["GITHUB_REPOSITORY"].split("/", 1)
+    site_base = f"https://{owner.lower()}.github.io/{repository_name}/"
+    successful = list((previous or {}).get("successful_previews", []))
+    if request["action"] != "delete" and not successful and previous and previous.get("status") == "success":
+        adopted = _legacy_success(pages, previous, request["pr_number"],
+                                  simulator_repository, site_base)
+        if adopted:
+            successful = [adopted]
+
     if request["action"] == "delete":
         effective = "deleted"
+        _remove_tree(pages, pages / "pr" / str(request["pr_number"]))
+        status_file = pages / "status" / "pr" / f"{request['pr_number']}.json"
+        if status_file.is_symlink():
+            raise ValueError("Refusing to remove a symlink from the Pages tree")
+        status_file.unlink(missing_ok=True)
     elif result == "success":
         try:
             _valid_firmware_url(firmware_url, os.environ["GITHUB_REPOSITORY"], run_id)
@@ -454,34 +555,53 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
                 _safe_extract_browser(browser_archive, extracted, request,
                                      simulator_repository, simulator_sha)
                 replace_glue(extracted, trusted_runtime_dir / "micropython.js", runtime_provenance)
-                preview = pages / "pr" / str(request["pr_number"])
-                _remove_tree(pages, preview)
+                preview = pages / "pr" / str(request["pr_number"]) / request["head_sha"]
+                staged = Path(temp) / "preview"
+                staged.mkdir()
+                _copy_trusted_shell(trusted_web, staged)
+                shutil.copytree(extracted / "browser", staged / "browser", dirs_exist_ok=True)
+                shutil.copytree(extracted / "builds", staged / "builds", dirs_exist_ok=True)
+                _assert_no_symlinks(staged)
                 _ensure_safe_parent(pages, preview.parent)
-                preview.mkdir()
-                _copy_trusted_shell(trusted_web, preview)
-                shutil.copytree(extracted / "browser", preview / "browser", dirs_exist_ok=True)
-                shutil.copytree(extracted / "builds", preview / "builds", dirs_exist_ok=True)
-                _assert_no_symlinks(preview)
+                if preview.exists():
+                    if preview.is_symlink() or not preview.is_dir() or _tree_digest(preview) != _tree_digest(staged):
+                        raise ValueError("Commit-specific preview already exists with different content")
+                else:
+                    shutil.copytree(staged, preview)
                 effective = "success"
         except Exception as exc:
             print(f"Preview artifact rejected: {type(exc).__name__}: {exc}")
             effective = "failure"
 
-    if effective != "success":
-        _remove_tree(pages, pages / "pr" / str(request["pr_number"]))
-
-    owner, repository_name = os.environ["GITHUB_REPOSITORY"].split("/", 1)
-    site_base = f"https://{owner.lower()}.github.io/{repository_name}/"
     run_url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}"
+    preview_url = site_base + f"pr/{request['pr_number']}/{request['head_sha']}/"
+    if effective == "success":
+        item = {
+            "head_sha": request["head_sha"],
+            "request_id": request["request_id"],
+            "source_repository": request["head_repository"],
+            "preview_url": preview_url,
+            "firmware_url": firmware_url,
+            "run_url": run_url,
+            "workflow_run_id": run_id,
+            "run_attempt": run_attempt,
+            "simulator_sha": simulator_sha,
+        }
+        successful = [item] + [old for old in successful if old.get("head_sha") != request["head_sha"]]
+        successful = successful[:2]
+
     status = {
         "request_id": request["request_id"],
         "status": effective,
+        "latest_run_url": run_url,
         "pr_number": request["pr_number"],
         "source_repository": request["head_repository"] or None,
         "source_sha": request["head_sha"],
         "source_updated_at": request["source_updated_at"],
-        "preview_url": site_base + f"pr/{request['pr_number']}/" if effective == "success" else None,
-        "firmware_url": firmware_url if effective == "success" else None,
+        "preview_url": successful[0]["preview_url"] if successful else None,
+        "firmware_url": successful[0].get("firmware_url") if successful else None,
+        "successful_previews": successful,
+        "failed_source_sha": request["head_sha"] if effective in ("failure", "cancelled") else None,
         "run_url": run_url,
     }
     state = {
@@ -492,10 +612,19 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
         "workflow_run_id": run_id,
         "run_attempt": run_attempt,
         "status": effective,
+        "base_repository": request["base_repository"],
+        "base_sha": request["base_sha"],
+        "base_ref": request["base_ref"],
+        "head_repository": request["head_repository"],
+        "head_ref": request["head_ref"],
+        "simulator_repository": simulator_repository,
+        "simulator_sha": simulator_sha,
+        "successful_previews": [] if effective == "deleted" else successful,
     }
     _write_json(pages, state_path, state)
-    _write_json(pages, pages / "status" / "pr" / f"{request['pr_number']}.json", status)
-    return {"applied": True, "status": effective}
+    if effective != "deleted":
+        _write_json(pages, pages / "status" / "pr" / f"{request['pr_number']}.json", status)
+    return {"applied": True, "status": effective, "successful_previews": state["successful_previews"]}
 
 
 def main() -> None:
@@ -526,6 +655,11 @@ def main() -> None:
         firmware_url=os.environ.get("FIRMWARE_URL", ""),
         github_token=os.environ["GH_TOKEN"],
     )
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with open(output, "a", encoding="utf-8") as stream:
+            stream.write(f"applied={str(result['applied']).lower()}\n")
+            stream.write(f"status={result['status']}\n")
     print(json.dumps(result, sort_keys=True))
 
 
