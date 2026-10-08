@@ -27,6 +27,14 @@ class FirmwareArtifactCleanupTests(unittest.TestCase):
                   "workflow_run": {"id": 205}},
             106: {"id": 106, "name": "specter-firmware-pr-19-run-206-attempt-2", "expired": False,
                   "workflow_run": {"id": 206}},
+            107: {"id": 107, "name": "specter-firmware_PR-19_aaaaaaaaaaaa", "expired": False,
+                  "workflow_run": {"id": 207}},
+            108: {"id": 108, "name": "specter-firmware_PR-19_aaaaaaaaaaaa_attempt-2", "expired": False,
+                  "workflow_run": {"id": 208}},
+            109: {"id": 109, "name": "specter-firmware_PR-20_aaaaaaaaaaaa", "expired": False,
+                  "workflow_run": {"id": 209}},
+            110: {"id": 110, "name": "specter-firmware_PR-19_invalid", "expired": False,
+                  "workflow_run": {"id": 210}},
         }
         self.calls = []
 
@@ -56,6 +64,18 @@ class FirmwareArtifactCleanupTests(unittest.TestCase):
             {103: "identity-mismatch", 104: "identity-mismatch"},
         )
         self.assertTrue(all(call[2] == TOKEN for call in self.calls))
+
+    def test_commit_named_artifacts_are_pr_and_run_scoped(self):
+        result = cleaner.prune(REPOSITORY, 19, [
+            {"artifact_id": 107, "workflow_run_id": 207},
+            {"artifact_id": 108, "workflow_run_id": 208},
+            {"artifact_id": 109, "workflow_run_id": 209},
+            {"artifact_id": 110, "workflow_run_id": 210},
+        ], TOKEN, self.request_fn)
+        self.assertEqual(result["deleted"], [107, 108])
+        self.assertIn(109, self.artifacts)
+        self.assertIn(110, self.artifacts)
+        self.assertEqual(len(result["skipped"]), 2)
 
     def test_duplicate_ids_are_deleted_once(self):
         result = cleaner.prune(REPOSITORY, 19, [
