@@ -97,6 +97,7 @@ jobs:
       contents: read
     outputs:
       firmware_url: ${{ steps.firmware.outputs.artifact-url }}
+      firmware_name: ${{ steps.record_firmware.outputs.firmware_name }}
     env:
       BASE_REPOSITORY: ${{ needs.validate.outputs.base_repository }}
       BASE_SHA: ${{ needs.validate.outputs.base_sha }}
@@ -167,6 +168,7 @@ jobs:
         working-directory: specter-diy
         run: nix develop -c make disco
       - name: Record and stage firmware provenance
+        id: record_firmware
         run: python3 simulator/web/tools/record_firmware.py
       - name: Install Emscripten 3.1.74
         run: |
@@ -198,7 +200,7 @@ jobs:
         id: firmware
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: specter-firmware-pr-${{ needs.validate.outputs.pr_number }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          name: ${{ steps.record_firmware.outputs.firmware_name }}
           path: firmware-artifact/
           if-no-files-found: error
           retention-days: 90
@@ -346,7 +348,7 @@ jobs:
       - name: Download firmware artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: specter-firmware-pr-${{ needs.validate.outputs.pr_number }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          name: ${{ needs.build.outputs.firmware_name }}
           path: firmware-artifact
       - name: Download trusted JavaScript runtime
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -493,7 +495,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: specter-firmware-pr-${{ needs.validate.outputs.pr_number }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          name: ${{ needs.build.outputs.firmware_name }}
           path: firmware-artifact
       - name: Download trusted JavaScript runtime
         if: needs.build.result == 'success' && needs.trusted_runtime.result == 'success' && needs.validate.outputs.action == 'build'
