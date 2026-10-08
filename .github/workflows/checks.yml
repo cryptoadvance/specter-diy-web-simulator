@@ -29,11 +29,15 @@ jobs:
         run: npm ci --prefix web
       - name: Run simulator unit tests
         run: |
-          python3 web/tests/test-resolve-build-target.py
-          python3 web/tests/test-trigger-pr.py
+          for test in web/tests/test-*.py; do
+            if [[ "$test" == *test-browser-manifest.py ]]; then continue; fi
+            python3 "$test"
+          done
+      - name: Run build-independent JavaScript tests
+        run: |
           node web/tests/test-demo-data.mjs
-          python3 web/tests/test-inspector.py
           node web/tests/test-build-provenance.mjs
+          node web/tests/test-preview-route.mjs
       - name: Install browser build dependencies
         run: |
           sudo apt-get update
@@ -45,6 +49,10 @@ jobs:
           path: specter-diy
           submodules: recursive
           persist-credentials: false
+      - name: Write and verify browser freeze manifest
+        run: |
+          python3 web/browser/write-browser-manifest.py "$GITHUB_WORKSPACE/specter-diy"
+          python3 web/tests/test-browser-manifest.py "$GITHUB_WORKSPACE/specter-diy"
       - name: Install Emscripten 3.1.74
         run: |
           git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
