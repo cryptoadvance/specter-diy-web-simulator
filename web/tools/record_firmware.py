@@ -8,6 +8,8 @@ import re
 import shutil
 import subprocess
 
+from firmware_artifact_names import firmware_artifact_name, firmware_filenames
+
 
 def record(source: Path, output: Path, metadata: dict) -> dict:
     actual_sha = subprocess.check_output(
@@ -19,14 +21,15 @@ def record(source: Path, output: Path, metadata: dict) -> dict:
     hashes = {}
     if (source / "bin").is_symlink():
         raise ValueError("Firmware output directory must not be a symlink")
-    for name in ("specter-diy.bin", "specter-diy.hex"):
-        source_file = source / "bin" / name
+    names = firmware_filenames(metadata["pr_number"], metadata["head_sha"])
+    for source_name, target_name in zip(("specter-diy.bin", "specter-diy.hex"), names):
+        source_file = source / "bin" / source_name
         if source_file.is_symlink() or not source_file.is_file() or source_file.stat().st_size == 0:
-            raise ValueError(f"Missing or unsafe firmware artifact: {name}")
-        target = output / name
+            raise ValueError(f"Missing or unsafe firmware artifact: {source_name}")
+        target = output / target_name
         shutil.copyfile(source_file, target)
         data = target.read_bytes()
-        hashes[name] = {"bytes": len(data), "sha256": sha256(data).hexdigest()}
+        hashes[target_name] = {"bytes": len(data), "sha256": sha256(data).hexdigest()}
     provenance = {
         "schema": 1,
         "kind": "firmware",
@@ -58,6 +61,13 @@ def main() -> None:
     if not re.fullmatch(r"[a-f0-9]{40}", metadata["simulator_sha"]):
         raise ValueError("Invalid simulator SHA")
     record(Path(os.environ["SPECTER_SOURCE_DIR"]), Path(os.environ["FIRMWARE_ARTIFACT_DIR"]), metadata)
+    name = firmware_artifact_name(
+        metadata["pr_number"], metadata["head_sha"],
+        int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+    )
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+            stream.write(f"firmware_name={name}\n")
 
 
 if __name__ == "__main__":
