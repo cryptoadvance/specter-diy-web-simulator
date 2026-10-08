@@ -234,8 +234,13 @@ of deleting the current PR's new preview. Closing a PR removes every public
 preview under `/pr/<N>/`, deletes the firmware artifacts recorded for the PR,
 clears its success history, and leaves a minimal tombstone to reject delayed
 requests. The state is excluded from public Pages output.
-Each workflow attempt has a unique artifact name, so rerunning a failed attempt
-cannot overwrite the previous successful firmware before finalization.
+The firmware download ZIP is named `specter-firmware_PR-440_47e6588891f3.zip`
+(PR number and the first 12 characters of its exact source commit). Inside the
+ZIP, the files use the same base name with `.bin` and `.hex` extensions;
+`source.json` continues to carry full-source-SHA, hashes and provenance.
+On a GitHub Actions rerun (attempt 2+), only the ZIP artifact name adds
+`_attempt-2` etc. This avoids collisions with an earlier artifact from the
+same workflow run without overwriting the previous firmware.
 
 The untrusted job builds firmware and WebAssembly from the exact PR head SHA.
 Its browser archive contains only `micropython.wasm` and `micropython.data`;
