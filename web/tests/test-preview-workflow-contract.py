@@ -230,9 +230,12 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         finalize = job("finalize")
         self.assertIn("retention-days: 90", build)
         self.assertIn(
-            "name: specter-firmware-pr-${{ needs.validate.outputs.pr_number }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}",
+            "name: ${{ steps.record_firmware.outputs.firmware_name }}",
             build,
         )
+        self.assertIn("firmware_name: ${{ steps.record_firmware.outputs.firmware_name }}", build)
+        self.assertIn("id: record_firmware", build)
+        self.assertEqual(WORKFLOW.count("name: ${{ needs.build.outputs.firmware_name }}"), 2)
         self.assertNotIn("overwrite: true", build)
         self.assertIn("FIRMWARE_ARTIFACTS_TO_PRUNE", finalize)
         self.assertIn('"successful_previews": [] if effective == "deleted" else successful',
