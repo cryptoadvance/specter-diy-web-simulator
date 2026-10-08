@@ -10,10 +10,13 @@ Specter DIY only validates and dispatches PR metadata to this paired
 repository, then exits; it does not wait for a build, edit PR comments, or host
 the browser preview. The Web Simulator publishes the immutable preview and
 public status JSON. For upstream `cryptoadvance/specter-diy` PRs, its trusted
-finalizer uses a short-lived, repository-scoped GitHub App token to post a
-fresh preview comment before deleting the previous App-owned comment. Paired
-forks can build previews without the upstream App credential and therefore
-skip automatic PR comments.
+finalizer uses the token of a dedicated **non-collaborator machine user** to
+create or update a single marked bot-owned preview comment in place, including
+a collapsible build-provenance section, firmware link, simulator link, and
+strong test-only warning. No token is exposed to an untrusted PR build.
+Paired forks can build previews without the upstream bot credential and
+therefore skip automatic upstream comments. A separate fork-only account
+and secret are needed when testing comment writing on fork PRs.
 
 Start with [the manual build and setup guide](docs/browser-simulator.md). It
 covers local builds, paired forks, the narrow dispatch token, Pages setup, and
