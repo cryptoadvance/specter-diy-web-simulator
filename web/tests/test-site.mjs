@@ -30,6 +30,23 @@ catch (error) {
     requests: requests.filter(url => /current\.json|build-info|micropython|browser\.js/.test(url)) }, null, 2));
   throw error;
 }
+// The under-device source link must identify the exact firmware revision,
+// including on PR preview builds that have no optional PR metadata.
+const underDevice = await page.evaluate(async () => {
+  const pointer = await (await fetch(new URL('browser/current.json', location.href))).json();
+  const build = await (await fetch(new URL(pointer.build + 'build-info.json', location.href))).json();
+  const link = document.querySelector('#source-commit-link');
+  return { label: link?.textContent, href: link?.href,
+    repository: build.source.repository, commit: build.source.commit,
+    version: build.firmware_version };
+});
+const expectedUnderDeviceVersion = underDevice.version ? `v${underDevice.version.replace(/^v/i, '')} · ` : '';
+const expectedUnderDeviceRevision = `${expectedUnderDeviceVersion}${underDevice.commit.slice(0, 7)}`;
+if (!underDevice.label?.includes(expectedUnderDeviceRevision) ||
+    !underDevice.label.startsWith('GitHub · ') ||
+    underDevice.href !== `https://github.com/${underDevice.repository}/commit/${underDevice.commit}`) {
+  throw new Error(`Incorrect under-device firmware provenance footer: ${JSON.stringify(underDevice)}`);
+}
 if (await page.locator('#advanced-options').isChecked() || await page.locator('#developer-inspector').isVisible()) {
   throw new Error('Developer Options must be off by default');
 }
