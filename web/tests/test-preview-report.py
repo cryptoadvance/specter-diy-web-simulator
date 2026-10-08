@@ -103,6 +103,8 @@ class PreviewReportTests(unittest.TestCase):
         self.calls.append((method, path, token, data))
         if method == "GET" and "/issues/19/comments?" in path:
             return self.comments
+        if method == "POST" and "/issues/19/comments" in path:
+            return {"id": 1000}
         return None
 
     def run_report(self, req, result="failure", run_id=202, pull=None):
@@ -149,8 +151,8 @@ class PreviewReportTests(unittest.TestCase):
         self.assertNotIn(b, body)
         self.assertNotIn(a, body)
         self.assertNotIn("/actions/runs/201/artifacts/301", body)
-        self.assertLess(next(i for i, call in enumerate(self.calls) if call[0] == "DELETE"),
-                        next(i for i, call in enumerate(self.calls) if call[0] == "POST"))
+        self.assertLess(next(i for i, call in enumerate(self.calls) if call[0] == "POST"),
+                        next(i for i, call in enumerate(self.calls) if call[0] == "DELETE"))
 
     def test_capacity_eviction_updates_old_pr_comment_without_a_dead_preview_link(self):
         req = request(sha="a" * 40)
@@ -169,6 +171,74 @@ class PreviewReportTests(unittest.TestCase):
         self.assertIn("browser preview removed to stay within GitHub Pages storage limits", body)
         self.assertIn("[Firmware artifact](https://github.com/cryptoadvance/specter-diy-web-simulator/actions/runs/201/artifacts/301)", body)
         self.assertNotIn("Open browser simulator", body)
+
+    def test_failed_post_keeps_previous_preview_comment(self):
+        req = request()
+        self.state_path.write_text(json.dumps(state(req)))
+        def failing_post(method, path, token, data=None):
+            if method == "POST":
+                raise RuntimeError("simulated GitHub API 503")
+            return self.request_fn(method, path, token, data)
+        with self.assertRaisesRegex(RuntimeError, "simulated GitHub API 503"):
+            reporter.report(
+                req, self.pages, SERVICE, SIM_SHA, 202, 1, "failure",
+                TOKEN, "specter-preview", request_fn=failing_post,
+                pull_fetcher=lambda *_: live_pr(req),
+            )
+        self.assertEqual([call[0] for call in self.calls if call[0] in ("POST", "DELETE")],
+                         [])
+
+    def test_invalid_post_response_does_not_delete_existing_comments(self):
+        req = request()
+        self.state_path.write_text(json.dumps(state(req)))
+        def bad_post(method, path, token, data=None):
+            if method == "POST":
+                return {"id": None}
+            return self.request_fn(method, path, token, data)
+        with self.assertRaisesRegex(ValueError, "invalid created comment ID"):
+            reporter.report(
+                req, self.pages, SERVICE, SIM_SHA, 202, 1, "failure",
+                TOKEN, "specter-preview", request_fn=bad_post,
+                pull_fetcher=lambda *_: live_pr(req),
+            )
+        self.assertFalse(any(call[0] == "DELETE" for call in self.calls))
+
+    def test_failed_old_comment_cleanup_can_be_retried(self):
+        req = request()
+        self.state_path.write_text(json.dumps(state(req)))
+        def failing_delete(method, path, token, data=None):
+            if method == "DELETE":
+                raise RuntimeError("simulated GitHub API delete failure")
+            return self.request_fn(method, path, token, data)
+        with self.assertRaisesRegex(RuntimeError, "simulated GitHub API delete failure"):
+            reporter.report(
+                req, self.pages, SERVICE, SIM_SHA, 202, 1, "failure",
+                TOKEN, "specter-preview", request_fn=failing_delete,
+                pull_fetcher=lambda *_: live_pr(req),
+            )
+        self.assertEqual(self.calls[-1][0], "POST")
+        result = self.run_report(req)
+        self.assertEqual(result["removed_comments"], 2)
+        self.assertEqual([call[0] for call in self.calls if call[0] in ("POST", "DELETE")],
+                         ["POST", "POST", "DELETE", "DELETE"])
+
+    def test_capacity_eviction_failed_post_preserves_previous_comment(self):
+        req = request(sha="a" * 40)
+        evicted = successful(req["head_sha"], 201, 301)
+        evicted["preview_url"] = None
+        evicted["preview_evicted"] = True
+        self.state_path.write_text(json.dumps(
+            state(req, result="capacity-evicted", run_id=201, history=[evicted])))
+        def failing_post(method, path, token, data=None):
+            if method == "POST":
+                raise RuntimeError("simulated GitHub API 503")
+            return self.request_fn(method, path, token, data)
+        with self.assertRaisesRegex(RuntimeError, "simulated GitHub API 503"):
+            reporter.report_capacity_evictions(
+                [19], self.pages, SERVICE, SIM_SHA, TOKEN, "specter-preview",
+                request_fn=failing_post, pull_fetcher=lambda *_: live_pr(req),
+            )
+        self.assertFalse(any(call[0] == "DELETE" for call in self.calls))
 
     def test_stale_run_or_live_pr_never_touches_comments(self):
         req = request()
