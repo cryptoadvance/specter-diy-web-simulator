@@ -519,6 +519,16 @@ jobs:
       - name: Apply validated result to the persistent Pages tree
         id: publish
         run: python3 simulator/web/tools/publish_preview.py
+      - name: Remove replaced previews and evict old PRs only near the Pages limit
+        id: prune-pages
+        if: >-
+          steps.publish.outcome == 'success' &&
+          steps.publish.outputs.applied == 'true' &&
+          needs.validate.outputs.action == 'build'
+        env:
+          PAGES_DIR: ${{ github.workspace }}/pages
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+        run: python3 simulator/web/tools/prune_pages.py
       - name: Commit and update GitHub Pages source tree
         if: steps.publish.outcome == 'success'
         run: |
@@ -570,6 +580,23 @@ jobs:
           SPECTER_PREVIEW_APP_TOKEN: ${{ steps.specter-app-token.outputs.token }}
           SPECTER_PREVIEW_APP_SLUG: ${{ steps.specter-app-token.outputs.app-slug }}
         run: python3 simulator/web/tools/report_preview.py
+      - name: Update PR comments whose previews were removed for Pages capacity
+        id: report-capacity-evictions
+        if: >-
+          steps.prune-pages.outputs.evicted_pr_numbers != '' &&
+          steps.prune-pages.outputs.evicted_pr_numbers != '[]' &&
+          steps.publish.outputs.applied == 'true' &&
+          steps.deployment.outcome == 'success' &&
+          needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy' &&
+          steps.specter-app-token.outcome == 'success'
+        env:
+          CAPACITY_EVICTED_PR_NUMBERS: ${{ steps.prune-pages.outputs.evicted_pr_numbers }}
+          PAGES_DIR: ${{ github.workspace }}/pages
+          SIMULATOR_REPOSITORY: ${{ github.repository }}
+          SIMULATOR_SHA: ${{ github.sha }}
+          SPECTER_PREVIEW_APP_TOKEN: ${{ steps.specter-app-token.outputs.token }}
+          SPECTER_PREVIEW_APP_SLUG: ${{ steps.specter-app-token.outputs.app-slug }}
+        run: python3 simulator/web/tools/report_preview.py
       - name: Remove replaced PR firmware artifacts
         id: prune-firmware
         if: >-
@@ -596,4 +623,5 @@ jobs:
           printf 'Trusted verification job: `%s`\n' '${{ needs.verify.result }}' >> "$GITHUB_STEP_SUMMARY"
           printf 'Publication result: `%s`\n' '${{ steps.publish.outputs.status }}' >> "$GITHUB_STEP_SUMMARY"
           printf 'PR comment report: `%s`\n' '${{ steps.report.outcome }}' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Pages capacity cleanup: `%s` (`%s` bytes after, evicted PRs `%s`)\n' '${{ steps.prune-pages.outcome }}' '${{ steps.prune-pages.outputs.bytes_after }}' '${{ steps.prune-pages.outputs.evicted_pr_numbers }}' >> "$GITHUB_STEP_SUMMARY"
           printf 'Firmware artifact cleanup: `%s`\n' '${{ steps.prune-firmware.outcome }}' >> "$GITHUB_STEP_SUMMARY"

@@ -206,11 +206,17 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertEqual(pin, "3cf3ecd58a97da0f2cc4b7586ca33abf02f68372")
         self.assertIn(f"ref: {pin}", WORKFLOW)
 
-    def test_preview_urls_are_per_commit_and_failed_builds_preserve_success_history(self):
+    def test_preview_urls_are_per_commit_and_only_latest_page_is_retained(self):
         publisher = (ROOT / "web/tools/publish_preview.py").read_text()
         self.assertIn('pages / "pr" / str(request["pr_number"]) / request["head_sha"]', publisher)
+        self.assertIn("_remove_superseded_previews(pages, request[\"pr_number\"], request[\"head_sha\"])", publisher)
         self.assertIn('"successful_previews": [] if effective == "deleted" else successful', publisher)
         self.assertIn('"latest_run_url": run_url', publisher)
+        pruner = (ROOT / "web/tools/prune_pages.py").read_text()
+        self.assertIn("PAGES_BUDGET_BYTES = 950_000_000", pruner)
+        self.assertIn("_remove_tree(pages, pages / \"pr\" / str(pr_number))", pruner)
+        self.assertIn("prune_pages.py", WORKFLOW)
+        self.assertIn("report-capacity-evictions", WORKFLOW)
         self.assertIn("PAGES_DIR", WORKFLOW)
         self.assertIn('os.environ["PR_NUMBER"] / os.environ["EXPECTED_SHA"]', WORKFLOW)
         self.assertIn('"$PAGES_DIR/pr/$PR_NUMBER/$HEAD_SHA"', WORKFLOW)
@@ -229,7 +235,7 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn("overwrite: true", build)
         self.assertIn("FIRMWARE_ARTIFACTS_TO_PRUNE", finalize)
-        self.assertIn('old["firmware_url"] = None',
+        self.assertIn('"successful_previews": [] if effective == "deleted" else successful',
                       (ROOT / "web/tools/publish_preview.py").read_text())
 
 

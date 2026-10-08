@@ -87,6 +87,31 @@ def _remove_tree(root: Path, target: Path) -> None:
     shutil.rmtree(target)
 
 
+def _remove_superseded_previews(pages: Path, pr_number: int, keep_sha: str) -> None:
+    """Keep only this PR's newest successful immutable preview online."""
+    root = pages / "pr" / str(pr_number)
+    if root.is_symlink():
+        raise ValueError("Refusing to remove a symlink from the Pages tree")
+    if not root.exists():
+        return
+    if not root.is_dir():
+        raise ValueError("Expected a PR preview directory")
+    _assert_no_symlinks(root)
+    for child in root.iterdir():
+        if child.name == keep_sha:
+            continue
+        if child.is_dir():
+            _remove_tree(pages, child)
+        elif child.is_file():
+            child.unlink()
+        else:
+            raise ValueError("Unexpected entry in the PR preview directory")
+    try:
+        root.rmdir()
+    except OSError:
+        pass
+
+
 def _write_json(root: Path, path: Path, value: dict) -> None:
     _ensure_safe_parent(root, path.parent)
     if path.is_symlink():
@@ -622,9 +647,11 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
         firmware_artifacts_to_prune = _firmware_artifact_references(
             successful, simulator_repository
         )
+        _remove_superseded_previews(pages, request["pr_number"], request["head_sha"])
         item = {
             "head_sha": request["head_sha"],
             "request_id": request["request_id"],
+            "source_updated_at": request["source_updated_at"],
             "source_repository": request["head_repository"],
             "preview_url": preview_url,
             "firmware_url": firmware_url,
@@ -633,10 +660,7 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
             "run_attempt": run_attempt,
             "simulator_sha": simulator_sha,
         }
-        successful = [item] + [old for old in successful if old.get("head_sha") != request["head_sha"]]
-        successful = successful[:2]
-        for old in successful[1:]:
-            old["firmware_url"] = None
+        successful = [item]
     elif effective in ("failure", "cancelled") and current_firmware_artifact:
         firmware_artifacts_to_prune = [current_firmware_artifact]
 

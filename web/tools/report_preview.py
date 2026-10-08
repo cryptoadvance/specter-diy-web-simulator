@@ -61,7 +61,10 @@ def _valid_success(item, number, site_base, simulator_repository):
     sha = item.get("head_sha", "")
     preview = item.get("preview_url", "")
     expected_preview = site_base + f"pr/{number}/{sha}/"
-    if not SHA_RE.fullmatch(sha) or preview != expected_preview:
+    evicted = item.get("preview_evicted") is True
+    if (not SHA_RE.fullmatch(sha) or
+            (evicted and preview is not None) or
+            (not evicted and preview != expected_preview)):
         raise ValueError("Trusted preview state contains an invalid preview URL")
     run_id = item.get("workflow_run_id")
     if type(run_id) is not int or run_id <= 0:
@@ -81,7 +84,7 @@ def comment_body(state, action, result, number, site_base, simulator_repository)
     if action == "delete":
         return None
     successful = state.get("successful_previews", [])
-    if not isinstance(successful, list) or len(successful) > 2:
+    if not isinstance(successful, list) or len(successful) > 1:
         raise ValueError("Trusted preview history is invalid")
     records = [_valid_success(item, number, site_base, simulator_repository)
                for item in successful]
@@ -93,16 +96,19 @@ def comment_body(state, action, result, number, site_base, simulator_repository)
         outcome = "failed" if result == "failure" else "was cancelled"
         lines.extend([f"Latest build `{sha[:7]}` {outcome}.", ""])
     if records:
-        lines.extend(["### Latest", "", f"`{records[0][0][:7]}` → [Open browser simulator]({records[0][1]})"])
+        lines.extend(["### Latest", ""])
+        if records[0][1]:
+            lines.append(f"`{records[0][0][:7]}` → [Open browser simulator]({records[0][1]})")
+        else:
+            lines.append(
+                f"`{records[0][0][:7]}` browser preview removed to stay within GitHub Pages storage limits. "
+                "Push a new commit to publish a fresh preview."
+            )
         if records[0][2]:
             lines.append(f"[Firmware artifact]({records[0][2]})")
         lines.append(f"[Build logs]({records[0][3]})")
     else:
         lines.extend(["No successful browser preview is available yet."])
-    if len(records) > 1:
-        lines.extend(["", "### Previous", "",
-                      f"`{records[1][0][:7]}` → [Open previous browser simulator]({records[1][1]})"])
-        lines.append(f"[Build logs]({records[1][3]})")
     if result in ("failure", "cancelled"):
         failed_run = state.get("latest_run_url")
         if isinstance(failed_run, str) and re.fullmatch(
@@ -171,7 +177,75 @@ def report(request, pages, simulator_repository, simulator_sha, run_id, run_atte
     return {"applied": True, "status": result, "removed_comments": len(marked)}
 
 
+def report_capacity_evictions(pr_numbers, pages, simulator_repository, simulator_sha,
+                              token, app_slug, request_fn=api, pull_fetcher=None):
+    """Replace stale PR comments after their previews were evicted for capacity."""
+    if not REPOSITORY_RE.fullmatch(simulator_repository) or not SHA_RE.fullmatch(simulator_sha):
+        raise ValueError("Invalid Web Simulator run identity")
+    if not re.fullmatch(r"[a-z0-9-]{1,39}", app_slug):
+        raise ValueError("Invalid GitHub App slug")
+    expected_login = app_slug + "[bot]"
+    fetch = pull_fetcher or (lambda repository, number, auth: request_fn(
+        "GET", f"/repos/{repository}/pulls/{number}", auth))
+    owner, repository_name = simulator_repository.split("/", 1)
+    site_base = f"https://{owner.lower()}.github.io/{repository_name}/"
+    results = []
+
+    for number in sorted(set(pr_numbers)):
+        if type(number) is not int or number <= 0:
+            raise ValueError("Invalid capacity-evicted PR number")
+        state = _load_state(pages / ".preview-state" / "pr" / f"{number}.json")
+        if (not state or state.get("status") != "capacity-evicted" or
+                state.get("simulator_repository", "").lower() != simulator_repository.lower()):
+            results.append({"pr_number": number, "status": "stale-state"})
+            continue
+        request = {
+            "request_id": state.get("latest_request_id", ""),
+            "action": "build",
+            "base_repository": state.get("base_repository", ""),
+            "base_sha": state.get("base_sha", ""),
+            "base_ref": state.get("base_ref", ""),
+            "pr_number": number,
+            "head_repository": state.get("head_repository", ""),
+            "head_sha": state.get("latest_source_sha", ""),
+            "head_ref": state.get("head_ref", ""),
+            "source_updated_at": state.get("latest_source_updated_at", ""),
+        }
+        if request["base_repository"].lower() != TARGET_REPOSITORY:
+            results.append({"pr_number": number, "status": "unsupported-base"})
+            continue
+        if not _validate_live_pr(request, token, fetch):
+            results.append({"pr_number": number, "status": "stale-pr"})
+            continue
+
+        comments = list_comments(request["base_repository"], number, token, request_fn)
+        marked = managed_comments(comments, expected_login)
+        for previous in marked:
+            comment_id = previous.get("id")
+            if type(comment_id) is not int or comment_id <= 0:
+                raise ValueError("GitHub returned an invalid comment ID")
+            request_fn("DELETE", f"/repos/{request['base_repository']}/issues/comments/{comment_id}", token)
+        body = comment_body(state, "build", "success", number, site_base, simulator_repository)
+        request_fn("POST", f"/repos/{request['base_repository']}/issues/{number}/comments",
+                   token, {"body": body})
+        results.append({"pr_number": number, "status": "reported",
+                        "removed_comments": len(marked)})
+    return results
+
+
 def main():
+    capacity_evictions = os.environ.get("CAPACITY_EVICTED_PR_NUMBERS")
+    if capacity_evictions is not None:
+        result = report_capacity_evictions(
+            pr_numbers=json.loads(capacity_evictions),
+            pages=Path(os.environ["PAGES_DIR"]),
+            simulator_repository=os.environ["SIMULATOR_REPOSITORY"],
+            simulator_sha=os.environ["SIMULATOR_SHA"],
+            token=os.environ["SPECTER_PREVIEW_APP_TOKEN"],
+            app_slug=os.environ["SPECTER_PREVIEW_APP_SLUG"],
+        )
+        print(json.dumps(result, sort_keys=True))
+        return
     request = {
         "request_id": os.environ["REQUEST_ID"],
         "action": os.environ["ACTION"],

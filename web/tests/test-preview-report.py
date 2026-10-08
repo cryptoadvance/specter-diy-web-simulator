@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Comment ownership, latest/previous rendering, and stale-result checks."""
+"""Comment ownership, latest-preview rendering, and stale-result checks."""
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import json
@@ -112,12 +112,10 @@ class PreviewReportTests(unittest.TestCase):
             pull_fetcher=lambda *_: pull if pull is not None else live_pr(req),
         )
 
-    def test_failed_commit_reposts_only_its_app_comments_with_two_successes(self):
+    def test_failed_commit_reposts_only_its_app_comments_with_latest_success(self):
         req = request()
         a, b = "a" * 40, "b" * 40
-        state(req, history=[successful(b, 201, 301), successful(a, 200, 300)])
-        self.state_path.write_text(json.dumps(state(req, history=[
-            successful(b, 201, 301), successful(a, 200, 300)])))
+        self.state_path.write_text(json.dumps(state(req, history=[successful(b, 201, 301)])))
         result = self.run_report(req)
         self.assertEqual(result, {"applied": True, "status": "failure", "removed_comments": 2})
         deletes = [call[1] for call in self.calls if call[0] == "DELETE"]
@@ -129,29 +127,48 @@ class PreviewReportTests(unittest.TestCase):
         body = posts[0][3]["body"]
         self.assertIn("Latest build `ccccccc` failed.", body)
         self.assertIn("[Open browser simulator](https://cryptoadvance.github.io/specter-diy-web-simulator/pr/19/" + b + "/)", body)
-        self.assertIn("[Open previous browser simulator](https://cryptoadvance.github.io/specter-diy-web-simulator/pr/19/" + a + "/)", body)
+        self.assertNotIn("### Previous", body)
+        self.assertNotIn(a, body)
         self.assertIn("[Firmware artifact](https://github.com/cryptoadvance/specter-diy-web-simulator/actions/runs/201/artifacts/301)", body)
         self.assertNotIn("/actions/runs/200/artifacts/300", body)
         self.assertIn("[Failed build logs](https://github.com/cryptoadvance/specter-diy-web-simulator/actions/runs/202)", body)
         self.assertEqual(body.count(reporter.MARKER), 1)
         self.assertTrue(all(call[2] == TOKEN for call in self.calls))
 
-    def test_success_comment_lists_latest_then_previous(self):
+    def test_success_comment_lists_only_latest_preview(self):
         req = request(sha="d" * 40)
         a, b, c = "a" * 40, "b" * 40, "d" * 40
         success_state = state(req, result="success", run_id=202,
-                              history=[successful(c, 202, 302), successful(b, 201, 301)])
+                              history=[successful(c, 202, 302)])
         self.state_path.write_text(json.dumps(success_state))
         self.run_report(req, result="success")
         body = next(call[3]["body"] for call in self.calls if call[0] == "POST")
-        self.assertLess(body.index("### Latest"), body.index("### Previous"))
         self.assertIn(f"`{c[:7]}` → [Open browser simulator]", body)
         self.assertIn("[Firmware artifact](https://github.com/cryptoadvance/specter-diy-web-simulator/actions/runs/202/artifacts/302)", body)
-        self.assertIn(f"`{b[:7]}` → [Open previous browser simulator]", body)
+        self.assertNotIn("### Previous", body)
+        self.assertNotIn(b, body)
         self.assertNotIn(a, body)
         self.assertNotIn("/actions/runs/201/artifacts/301", body)
         self.assertLess(next(i for i, call in enumerate(self.calls) if call[0] == "DELETE"),
                         next(i for i, call in enumerate(self.calls) if call[0] == "POST"))
+
+    def test_capacity_eviction_updates_old_pr_comment_without_a_dead_preview_link(self):
+        req = request(sha="a" * 40)
+        evicted = successful(req["head_sha"], 201, 301)
+        evicted["preview_url"] = None
+        evicted["preview_evicted"] = True
+        evicted_state = state(req, result="capacity-evicted", run_id=201, history=[evicted])
+        self.state_path.write_text(json.dumps(evicted_state))
+        result = reporter.report_capacity_evictions(
+            [19], self.pages, SERVICE, SIM_SHA, TOKEN, "specter-preview",
+            request_fn=self.request_fn,
+            pull_fetcher=lambda *_: live_pr(req),
+        )
+        self.assertEqual(result, [{"pr_number": 19, "status": "reported", "removed_comments": 2}])
+        body = next(call[3]["body"] for call in self.calls if call[0] == "POST")
+        self.assertIn("browser preview removed to stay within GitHub Pages storage limits", body)
+        self.assertIn("[Firmware artifact](https://github.com/cryptoadvance/specter-diy-web-simulator/actions/runs/201/artifacts/301)", body)
+        self.assertNotIn("Open browser simulator", body)
 
     def test_stale_run_or_live_pr_never_touches_comments(self):
         req = request()

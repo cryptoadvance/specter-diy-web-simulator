@@ -346,7 +346,7 @@ class PreviewPublisherTests(unittest.TestCase):
                 )
                 self.assertEqual(result["status"], "failure")
 
-    def test_failed_newer_build_keeps_latest_and_previous_successes_online(self):
+    def test_failed_newer_build_keeps_latest_successful_preview_online(self):
         first = request()
         self.assertEqual(self.apply(first)["status"], "success")
         second = request(sha="c" * 40, updated="2026-10-01T12:00:00.000000Z", run_id=102)
@@ -368,19 +368,18 @@ class PreviewPublisherTests(unittest.TestCase):
             SERVICE, SIM_SHA, 203, 1, "", "token", lambda *_: live_pr(third),
         )
         self.assertEqual(result["status"], "failure")
-        for successful_sha in (SHA, second["head_sha"]):
-            self.assertTrue((self.pages / f"pr/19/{successful_sha}/index.html").is_file())
+        self.assertFalse((self.pages / f"pr/19/{SHA}").exists())
+        self.assertTrue((self.pages / f"pr/19/{second['head_sha']}/index.html").is_file())
         self.assertFalse((self.pages / f"pr/19/{third['head_sha']}").exists())
         state = json.loads((self.pages / ".preview-state/pr/19.json").read_text())
         self.assertEqual([entry["head_sha"] for entry in state["successful_previews"]],
-                         [second["head_sha"], SHA])
+                         [second["head_sha"]])
         self.assertIn("artifacts/124", state["successful_previews"][0]["firmware_url"])
-        self.assertIsNone(state["successful_previews"][1]["firmware_url"])
         status = json.loads((self.pages / "status/pr/19.json").read_text())
         self.assertEqual(status["status"], "failure")
         self.assertEqual(status["preview_url"], state["successful_previews"][0]["preview_url"])
 
-    def test_successful_c_keeps_immutable_a_and_promotes_b_to_previous(self):
+    def test_successful_new_commit_removes_every_older_page_for_the_pr(self):
         a = request()
         self.apply(a)
         b = request(sha="c" * 40, updated="2026-10-01T12:00:00.000000Z", run_id=102)
@@ -405,11 +404,11 @@ class PreviewPublisherTests(unittest.TestCase):
         ])
         state = json.loads((self.pages / ".preview-state/pr/19.json").read_text())
         self.assertEqual([item["head_sha"] for item in state["successful_previews"]],
-                         [c["head_sha"], b["head_sha"]])
+                         [c["head_sha"]])
         self.assertIn("artifacts/125", state["successful_previews"][0]["firmware_url"])
-        self.assertIsNone(state["successful_previews"][1]["firmware_url"])
-        for sha in (a["head_sha"], b["head_sha"], c["head_sha"]):
-            self.assertTrue((self.pages / f"pr/19/{sha}/index.html").is_file())
+        for sha in (a["head_sha"], b["head_sha"]):
+            self.assertFalse((self.pages / f"pr/19/{sha}").exists())
+        self.assertTrue((self.pages / f"pr/19/{c['head_sha']}/index.html").is_file())
 
     def test_existing_commit_url_is_never_replaced_on_a_repeat_build(self):
         first = request(run_id=100)

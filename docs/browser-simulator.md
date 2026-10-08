@@ -213,22 +213,29 @@ only when the visitor expands the panel (or explicitly enables
 `?virtual-host=1`). PR previews keep the panel visible but explain that the local
 connection is disabled there; their stricter CSP remains in force.
 
-Successful PR previews use immutable paths `/pr/<N>/<full-head-sha>/`; a later
-commit never replaces an earlier commit's URL. The trusted publisher keeps the
-two most recent successful previews and their build-log links in
-`.preview-state/pr/<N>.json` on its persistent `gh-pages` branch. Each PR has
+Successful PR previews use commit-specific paths `/pr/<N>/<full-head-sha>/`.
+After a newer preview has been built successfully, the trusted publisher removes
+the older browser pages for that PR, so only its latest successful preview URL
+remains online. A failed or cancelled build keeps the last successful page.
+The publisher retains its provenance and firmware link in
+`.preview-state/pr/<N>.json` on the persistent `gh-pages` branch. Each PR has
 one current firmware artifact after a successful publication, retained for up
 to 90 days. After a newer preview is published and its PR report succeeds, the
-finalizer deletes the replaced firmware artifacts for that PR. The previous
-browser preview stays online, but its old firmware link is removed from the
-comment. A failed or cancelled build preserves the last successful firmware
-and preview history.
+finalizer deletes the replaced firmware artifacts for that PR.
+
+Before deployment, the workflow measures the public Pages files. It does not
+remove pages for other PRs during normal publishing. If the public tree exceeds
+its 950 MB safety budget, it evicts previews from the least recently updated
+PRs until the tree is under budget, while protecting the PR currently being
+published. Evicted PR comments are updated to explain that their browser page
+was removed for Pages capacity; their firmware artifact remains available. If
+older PR pages cannot bring the tree under budget, publication stops instead
+of deleting the current PR's new preview. Closing a PR removes every public
+preview under `/pr/<N>/`, deletes the firmware artifacts recorded for the PR,
+clears its success history, and leaves a minimal tombstone to reject delayed
+requests. The state is excluded from public Pages output.
 Each workflow attempt has a unique artifact name, so rerunning a failed attempt
 cannot overwrite the previous successful firmware before finalization.
-Closing a PR removes every public preview under `/pr/<N>/`, deletes the
-firmware artifacts recorded for the PR, clears its success history, and leaves
-a minimal tombstone to reject delayed requests. The state is excluded from
-public Pages output.
 
 The untrusted job builds firmware and WebAssembly from the exact PR head SHA.
 Its browser archive contains only `micropython.wasm` and `micropython.data`;
