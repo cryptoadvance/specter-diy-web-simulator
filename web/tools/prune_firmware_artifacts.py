@@ -85,11 +85,15 @@ def prune(repository, pr_number, candidates, token, request_fn=api):
             continue
         workflow_run = artifact.get("workflow_run") or {}
         artifact_name = artifact.get("name")
-        expected_name = re.fullmatch(
+        legacy_run_name = re.fullmatch(
             rf"specter-firmware-pr-{pr_number}-run-{run_id}-attempt-[1-9][0-9]*",
             artifact_name or "",
         )
-        if ((artifact_name not in legacy_names and not expected_name) or
+        commit_named = re.fullmatch(
+            rf"specter-firmware_PR-{pr_number}_[a-f0-9]{{12}}(?:_attempt-(?:[2-9]|[1-9][0-9]+))?",
+            artifact_name or "",
+        )
+        if ((artifact_name not in legacy_names and not legacy_run_name and not commit_named) or
                 workflow_run.get("id") != run_id):
             skipped.append({"artifact_id": artifact_id, "reason": "identity-mismatch"})
             continue
