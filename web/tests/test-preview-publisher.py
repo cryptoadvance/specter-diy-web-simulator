@@ -121,6 +121,10 @@ def browser_archive(path: Path, req: dict, tamper=None) -> None:
 
 
 def firmware_artifact(path: Path, req: dict, tamper=None) -> None:
+    # Every simulated build gets a fresh artifact directory; commit-specific names
+    # must not leave old SHA files in the fixture when the test moves to a new SHA.
+    if path.exists():
+        shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
     names = publisher.firmware_filenames(req["pr_number"], req["head_sha"])
     files = {name: f"firmware:{name}:{req['head_sha']}".encode() for name in names}
