@@ -137,10 +137,8 @@ def replace_managed_comment(repository, number, comments, expected_login, token,
         old_ids.append(comment_id)
 
     if body is not None:
-        created = request_fn(
-            "POST", f"/repos/{repository}/issues/{number}/comments",
-            token, {"body": body},
-        )
+        created = request_fn("POST", f"/repos/{repository}/issues/{number}/comments",
+                             token, {"body": body})
         if (not isinstance(created, dict) or
                 type(created.get("id")) is not int or created["id"] <= 0):
             raise ValueError("GitHub returned an invalid created comment ID")
