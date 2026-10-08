@@ -12,6 +12,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from package_browser import package
 from record_firmware import record
+from firmware_artifact_names import firmware_filenames
 
 
 BASE = "alice/specter-diy"
@@ -87,9 +88,10 @@ class PreviewPackagerTests(unittest.TestCase):
             output = Path(temp) / "firmware-artifact"
             provenance = record(source, output, metadata)
             self.assertEqual(provenance["source_sha"], sha)
-            self.assertEqual(set(provenance["files"]), {"specter-diy.bin", "specter-diy.hex"})
-            for name in ("specter-diy.bin", "specter-diy.hex"):
-                self.assertEqual((output / name).read_bytes(), name.encode())
+            names = firmware_filenames(12, sha)
+            self.assertEqual(set(provenance["files"]), set(names))
+            for original, renamed in zip(("specter-diy.bin", "specter-diy.hex"), names):
+                self.assertEqual((output / renamed).read_bytes(), original.encode())
 
 
 if __name__ == "__main__":
