@@ -15,7 +15,7 @@ specter-diy PR event
                                                        ├─ fresh trusted runner: JS from exact base SHA
                                                        ├─ finalizer: validate and combine artifacts
                                                        ├─ publish immutable Pages preview + trusted state
-                                                       └─ GitHub App reposts the final PR comment
+                                                       └─ machine user updates one marked PR comment
 ```
 
 The official preview URL for a PR includes its full source commit SHA, for
@@ -167,27 +167,45 @@ base, head repository, branch, number, and exact SHA. The source checkout is by
 SHA, including submodules. The trusted finalizer validates the exact request,
 run identity, monotonic state, and live PR again before it reports the result.
 
-The trusted simulator finalizer uses a short-lived GitHub App installation
-token to manage one marked PR conversation comment. Install the App on **only**
-`cryptoadvance/specter-diy` and grant only the **Pull requests: Read and write**
-repository permission. For each accepted result, it posts the refreshed
-comment first and, only after GitHub confirms creation, deletes older comments
-from that App identity containing `<!-- specter-web-simulator-preview -->`.
-The new comment appears at the bottom. If posting fails, the old comment remains;
-if cleanup fails, a later successful report can remove duplicates. A closed
-PR removes all its previews and matching App comments without posting anew.
+The trusted simulator finalizer writes a **single normal PR comment** through a
+dedicated, non-collaborator **machine-user account** (for example,
+`specter-preview-bot`). The bot must have **only read access** to
+`cryptoadvance/specter-diy`: do not add it as a repository collaborator or
+organization member with write, triage, or admin permissions. It is a regular
+GitHub user, not a GitHub App; therefore GitHub does not display a Bot badge.
+Its profile should clearly identify the account as automated.
 
-Configure these Web Simulator repository settings:
+The finalizer confirms the PAT belongs to the configured GitHub user through
+`GET /user`, then revalidates the exact live PR and trusted published state.
+It creates a marked comment only if none exists; otherwise it **PATCHes the
+existing comment in place**, preserving its ID and avoiding duplicate timeline
+entries/notifications. The comment includes the compact `Specter PR Build`
+status, collapsed build provenance, browser simulator and matching firmware
+links, and a prominent experimental-build safety warning. The reporter only
+updates/deletes comments that BOTH belong to the expected bot user AND contain
+`<!-- specter-web-simulator-preview -->`. Additional older matching comments
+are cleaned up, but other users' comments are not touched. Closing a PR removes
+only its own marked comments. Pages capacity eviction updates the existing
+comment without linking to a removed preview.
 
-- Repository variable `SPECTER_PREVIEW_APP_ID`: the GitHub App ID.
-- Repository secret `SPECTER_PREVIEW_APP_PRIVATE_KEY`: the App private key.
+Configure these settings on the **real Web Simulator repository**, not on
+Specter DIY and not in the bot's personal account:
 
-The workflow resolves the installation ID and scopes each short-lived token to
-the single repository; it uses the App slug returned by the token action to
-verify the expected comment author. The App needs no Contents, Actions, Issues,
-or Administration permission. Keep `WEB_SIMULATOR_DISPATCH_TOKEN` separately in
-the Specter DIY repository; it only dispatches the Web Simulator workflow and
-is never exposed to the untrusted build job.
+- Repository secret `SPECTER_PREVIEW_BOT_TOKEN`: a **production** Personal
+  Access Token (classic) created by the dedicated machine user, with only
+  `public_repo` scope and a limited expiration. Rotate/revoke this credential
+  promptly if exposed. **Do not reuse the fork test PAT.**
+- Repository variable `SPECTER_PREVIEW_BOT_LOGIN`: the machine user's exact
+  GitHub login, without `@`.
+
+A classic PAT's `public_repo` scope is wider than PR comments, but it never
+grants repository permissions beyond the machine user's own. Because this user
+has no write access to Specter DIY, it cannot edit third-party PR descriptions
+or other users' comments. It may still perform ordinary GitHub public-user
+actions (such as opening its own issues). The bot token must be kept ONLY in
+the trusted finalizer; untrusted build, verification, and dispatch jobs must
+never receive it. Keep `WEB_SIMULATOR_DISPATCH_TOKEN` separately in the
+Specter DIY repository: it only dispatches the Web Simulator workflow.
 
 ### Production merge prerequisite: protect `main`
 
@@ -203,20 +221,20 @@ the service is deployed as the trusted preview publisher:
   documented policy or a green status badge.
 
 The `main` branch must be protected because its workflow code can publish
-browser content and, once the App is configured, write to Specter PRs.
-Repository settings, GitHub App installation, Actions secrets and organization
-policy must be configured by an authorized administrator.
+browser content and, once the machine-user token is configured, manage the
+machine user's marked comments on Specter PRs. Repository Actions secrets,
+variables, branch protection and organization policy require an administrator.
 
-The trusted finalizer's `GITHUB_TOKEN` also has `Actions: write` in the Web
-Simulator repository solely to delete superseded firmware artifacts. The App
-token remains limited to writing PR conversation comments in
-`cryptoadvance/specter-diy`; the untrusted build job has no Actions write
-permission.
+The trusted finalizer's `GITHUB_TOKEN` has `Actions: write` **only** in
+the Web Simulator repository to delete superseded firmware artifacts. The
+machine-user PAT is used separately to manage its own marked comments on
+`cryptoadvance/specter-diy`. PR-controlled build jobs never receive either
+privileged token.
 
-Fork-source PRs targeting `cryptoadvance/specter-diy` use this App reporter and
-remain supported. A paired Web Simulator fork can still build and publish its
-own previews, but it does not receive the upstream App credential and therefore
-does not write comments on its forked Specter repository.
+External contributors targeting `cryptoadvance/specter-diy` are supported.
+Paired Web Simulator forks can build previews separately without receiving
+the **production** bot credential. Their own tests require a different
+fork-scoped machine-user token and explicit fork-only repository guards.
 
 The service uses its workflow token with `pull-requests: read` to validate the
 live PR. Published PR pages receive a stricter copy of the trusted shell's
@@ -296,15 +314,12 @@ Pages deploys it from a Pages artifact created by the trusted finalizer.
 
 This makes the Web Simulator default branch a stronger trust root: a malicious
 change merged there could publish deceptive previews, serve malicious browser
-code, or report false test results. The trusted finalizer also holds a short-lived
-GitHub App installation token with `Pull requests: Read and write`, restricted
-to the `cryptoadvance/specter-diy` repository, to manage marked preview
-comments. These GitHub permissions are broader than comments alone: a
-compromised trusted finalizer or App private key could modify other PR metadata
-and comments, but the App has no Contents, Actions, or Administration permission
-and cannot directly modify repository code. The untrusted firmware and browser
-build jobs have no access to this credential. Review changes to the Web Simulator
-default branch and its workflows with that trust trade-off in mind.
+code, or misuse the machine-user token held by the trusted finalizer. The
+machine user has no Specter repository write access, and GitHub enforces
+ownership on edits/deletes to existing comments. The PAT can still perform
+ordinary public-user actions; it is not a comment-only API permission.
+Never grant the bot repository write permissions. Review changes to the
+Web Simulator default branch, reporter, and workflows accordingly.
 
 The preview workflow pins third-party actions to immutable commit SHAs. Existing
 general-purpose repository checks continue their established version-tag
