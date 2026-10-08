@@ -32,6 +32,7 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         build = job("build", "trusted_runtime")
         self.assertIn("permissions:\n      contents: read", build)
         self.assertNotIn("contents: write", build)
+        self.assertNotIn("actions: write", build)
         self.assertNotIn("pages: write", build)
         self.assertNotIn("id-token: write", build)
         self.assertNotIn("secrets.", build)
@@ -66,6 +67,7 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("id-token: write", finalize)
         self.assertIn("python3 simulator/web/tools/publish_preview.py", finalize)
         self.assertIn("actions/deploy-pages@", finalize)
+        self.assertIn("actions: write", finalize)
         self.assertIn("preview-publish-${{ github.repository }}", finalize)
         self.assertIn("actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1", finalize)
         self.assertIn("permission-pull-requests: write", finalize)
@@ -79,10 +81,14 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", job("build", "trusted_runtime"))
         self.assertNotIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", job("trusted_runtime", "verify"))
         self.assertNotIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", job("verify", "finalize"))
+        self.assertIn("actions: read", job("verify", "finalize"))
         self.assertNotIn("repository: ${{ needs.validate.outputs.head_repository }}", finalize)
         self.assertNotIn("nix develop", finalize)
         self.assertNotIn("npm ", finalize)
         self.assertNotIn("node ", finalize)
+        self.assertIn("python3 simulator/web/tools/prune_firmware_artifacts.py", finalize)
+        self.assertLess(finalize.index("report_preview.py"),
+                        finalize.index("prune_firmware_artifacts.py"))
         publisher_source = (ROOT / "web/tools/publish_preview.py").read_text()
         self.assertNotIn("subprocess", publisher_source)
         self.assertNotIn("os.system", publisher_source)
@@ -212,6 +218,19 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         staging = (ROOT / "web/tools/stage_pages_site.py").read_text()
         self.assertIn('("pr", "status")', staging)
         self.assertNotIn(".preview-state", staging)
+
+    def test_only_latest_firmware_artifact_is_retained_per_pr(self):
+        build = job("build", "trusted_runtime")
+        finalize = job("finalize")
+        self.assertIn("retention-days: 90", build)
+        self.assertIn(
+            "name: specter-firmware-pr-${{ needs.validate.outputs.pr_number }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}",
+            build,
+        )
+        self.assertNotIn("overwrite: true", build)
+        self.assertIn("FIRMWARE_ARTIFACTS_TO_PRUNE", finalize)
+        self.assertIn('old["firmware_url"] = None',
+                      (ROOT / "web/tools/publish_preview.py").read_text())
 
 
 if __name__ == "__main__":

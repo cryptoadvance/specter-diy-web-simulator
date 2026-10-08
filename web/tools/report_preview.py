@@ -102,8 +102,6 @@ def comment_body(state, action, result, number, site_base, simulator_repository)
     if len(records) > 1:
         lines.extend(["", "### Previous", "",
                       f"`{records[1][0][:7]}` → [Open previous browser simulator]({records[1][1]})"])
-        if records[1][2]:
-            lines.append(f"[Firmware artifact]({records[1][2]})")
         lines.append(f"[Build logs]({records[1][3]})")
     if result in ("failure", "cancelled"):
         failed_run = state.get("latest_run_url")

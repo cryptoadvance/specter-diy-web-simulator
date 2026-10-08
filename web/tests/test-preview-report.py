@@ -130,6 +130,8 @@ class PreviewReportTests(unittest.TestCase):
         self.assertIn("Latest build `ccccccc` failed.", body)
         self.assertIn("[Open browser simulator](https://cryptoadvance.github.io/specter-diy-web-simulator/pr/19/" + b + "/)", body)
         self.assertIn("[Open previous browser simulator](https://cryptoadvance.github.io/specter-diy-web-simulator/pr/19/" + a + "/)", body)
+        self.assertIn("[Firmware artifact](https://github.com/cryptoadvance/specter-diy-web-simulator/actions/runs/201/artifacts/301)", body)
+        self.assertNotIn("/actions/runs/200/artifacts/300", body)
         self.assertIn("[Failed build logs](https://github.com/cryptoadvance/specter-diy-web-simulator/actions/runs/202)", body)
         self.assertEqual(body.count(reporter.MARKER), 1)
         self.assertTrue(all(call[2] == TOKEN for call in self.calls))
@@ -144,9 +146,10 @@ class PreviewReportTests(unittest.TestCase):
         body = next(call[3]["body"] for call in self.calls if call[0] == "POST")
         self.assertLess(body.index("### Latest"), body.index("### Previous"))
         self.assertIn(f"`{c[:7]}` → [Open browser simulator]", body)
+        self.assertIn("[Firmware artifact](https://github.com/cryptoadvance/specter-diy-web-simulator/actions/runs/202/artifacts/302)", body)
         self.assertIn(f"`{b[:7]}` → [Open previous browser simulator]", body)
         self.assertNotIn(a, body)
-        self.assertIn("[Firmware artifact](https://github.com/cryptoadvance/specter-diy-web-simulator/actions/runs/201/artifacts/301)", body)
+        self.assertNotIn("/actions/runs/201/artifacts/301", body)
         self.assertLess(next(i for i, call in enumerate(self.calls) if call[0] == "DELETE"),
                         next(i for i, call in enumerate(self.calls) if call[0] == "POST"))
 

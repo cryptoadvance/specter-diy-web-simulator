@@ -417,6 +417,37 @@ def _valid_firmware_url(value: str, repository: str, run_id: int) -> str:
     return value
 
 
+def _firmware_artifact_reference(value: str, repository: str,
+                                 expected_run_id: int | None = None) -> dict | None:
+    owner, name = repository.split("/", 1)
+    match = re.fullmatch(
+        rf"https://github\.com/{re.escape(owner)}/{re.escape(name)}/actions/runs/([1-9][0-9]*)/artifacts/([1-9][0-9]*)",
+        value or "",
+    )
+    if not match:
+        return None
+    run_id, artifact_id = map(int, match.groups())
+    if expected_run_id is not None and run_id != expected_run_id:
+        return None
+    return {"workflow_run_id": run_id, "artifact_id": artifact_id}
+
+
+def _firmware_artifact_references(successful: list, repository: str) -> list[dict]:
+    references = []
+    for item in successful:
+        if not isinstance(item, dict):
+            continue
+        expected_run_id = item.get("workflow_run_id")
+        if type(expected_run_id) is not int or expected_run_id <= 0:
+            continue
+        reference = _firmware_artifact_reference(
+            item.get("firmware_url", ""), repository, expected_run_id
+        )
+        if reference and reference not in references:
+            references.append(reference)
+    return references
+
+
 def _tree_digest(root: Path) -> str:
     digest = sha256()
     _assert_no_symlinks(root)
@@ -520,10 +551,17 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
 
     state_path = pages / ".preview-state" / "pr" / f"{request['pr_number']}.json"
     previous = _load_state(state_path)
+    current_firmware_artifact = _firmware_artifact_reference(
+        firmware_url, simulator_repository, run_id
+    )
     if not _is_newer(request, run_id, run_attempt, previous):
-        return {"applied": False, "status": "stale"}
+        return {"applied": False, "status": "stale",
+                "firmware_artifacts_to_prune": [current_firmware_artifact]
+                if current_firmware_artifact else []}
     if not _validate_live_pr(request, github_token, pull_fetcher):
-        return {"applied": False, "status": "stale"}
+        return {"applied": False, "status": "stale",
+                "firmware_artifacts_to_prune": [current_firmware_artifact]
+                if current_firmware_artifact else []}
 
     effective = result
     owner, repository_name = os.environ["GITHUB_REPOSITORY"].split("/", 1)
@@ -535,8 +573,13 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
         if adopted:
             successful = [adopted]
 
+    firmware_artifacts_to_prune = []
+
     if request["action"] == "delete":
         effective = "deleted"
+        firmware_artifacts_to_prune = _firmware_artifact_references(
+            successful, simulator_repository
+        )
         _remove_tree(pages, pages / "pr" / str(request["pr_number"]))
         status_file = pages / "status" / "pr" / f"{request['pr_number']}.json"
         if status_file.is_symlink():
@@ -576,6 +619,9 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
     run_url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}"
     preview_url = site_base + f"pr/{request['pr_number']}/{request['head_sha']}/"
     if effective == "success":
+        firmware_artifacts_to_prune = _firmware_artifact_references(
+            successful, simulator_repository
+        )
         item = {
             "head_sha": request["head_sha"],
             "request_id": request["request_id"],
@@ -589,6 +635,17 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
         }
         successful = [item] + [old for old in successful if old.get("head_sha") != request["head_sha"]]
         successful = successful[:2]
+        for old in successful[1:]:
+            old["firmware_url"] = None
+    elif effective in ("failure", "cancelled") and current_firmware_artifact:
+        firmware_artifacts_to_prune = [current_firmware_artifact]
+
+    if effective == "success" and current_firmware_artifact:
+        current_id = current_firmware_artifact["artifact_id"]
+        firmware_artifacts_to_prune = [
+            reference for reference in firmware_artifacts_to_prune
+            if reference["artifact_id"] != current_id
+        ]
 
     status = {
         "request_id": request["request_id"],
@@ -624,7 +681,12 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
     _write_json(pages, state_path, state)
     if effective != "deleted":
         _write_json(pages, pages / "status" / "pr" / f"{request['pr_number']}.json", status)
-    return {"applied": True, "status": effective, "successful_previews": state["successful_previews"]}
+    return {
+        "applied": True,
+        "status": effective,
+        "successful_previews": state["successful_previews"],
+        "firmware_artifacts_to_prune": firmware_artifacts_to_prune,
+    }
 
 
 def main() -> None:
@@ -660,6 +722,11 @@ def main() -> None:
         with open(output, "a", encoding="utf-8") as stream:
             stream.write(f"applied={str(result['applied']).lower()}\n")
             stream.write(f"status={result['status']}\n")
+            stream.write(
+                "firmware_artifacts_to_prune="
+                + json.dumps(result.get("firmware_artifacts_to_prune", []), separators=(",", ":"))
+                + "\n"
+            )
     print(json.dumps(result, sort_keys=True))
 
 

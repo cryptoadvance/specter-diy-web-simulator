@@ -187,6 +187,12 @@ or Administration permission. Keep `WEB_SIMULATOR_DISPATCH_TOKEN` separately in
 the Specter DIY repository; it only dispatches the Web Simulator workflow and
 is never exposed to the untrusted build job.
 
+The trusted finalizer's `GITHUB_TOKEN` also has `Actions: write` in the Web
+Simulator repository solely to delete superseded firmware artifacts. The App
+token remains limited to writing PR conversation comments in
+`cryptoadvance/specter-diy`; the untrusted build job has no Actions write
+permission.
+
 Fork-source PRs targeting `cryptoadvance/specter-diy` use this App reporter and
 remain supported. A paired Web Simulator fork can still build and publish its
 own previews, but it does not receive the upstream App credential and therefore
@@ -209,13 +215,20 @@ connection is disabled there; their stricter CSP remains in force.
 
 Successful PR previews use immutable paths `/pr/<N>/<full-head-sha>/`; a later
 commit never replaces an earlier commit's URL. The trusted publisher keeps the
-two most recent successful previews and their firmware/log links in
-`.preview-state/pr/<N>.json` on its persistent `gh-pages` branch. A failed or
-cancelled build advances the stale-request guard and reports the failure while
-preserving successful preview directories and their history. Older requests
-cannot replace newer state. Closing a PR removes every public preview under
-`/pr/<N>/`, clears its success history, and leaves a minimal tombstone to reject
-delayed requests. The state is excluded from public Pages output.
+two most recent successful previews and their build-log links in
+`.preview-state/pr/<N>.json` on its persistent `gh-pages` branch. Each PR has
+one current firmware artifact after a successful publication, retained for up
+to 90 days. After a newer preview is published and its PR report succeeds, the
+finalizer deletes the replaced firmware artifacts for that PR. The previous
+browser preview stays online, but its old firmware link is removed from the
+comment. A failed or cancelled build preserves the last successful firmware
+and preview history.
+Each workflow attempt has a unique artifact name, so rerunning a failed attempt
+cannot overwrite the previous successful firmware before finalization.
+Closing a PR removes every public preview under `/pr/<N>/`, deletes the
+firmware artifacts recorded for the PR, clears its success history, and leaves
+a minimal tombstone to reject delayed requests. The state is excluded from
+public Pages output.
 
 The untrusted job builds firmware and WebAssembly from the exact PR head SHA.
 Its browser archive contains only `micropython.wasm` and `micropython.data`;

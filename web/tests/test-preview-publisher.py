@@ -228,6 +228,7 @@ class PreviewPublisherTests(unittest.TestCase):
         self.assertEqual(status["preview_url"], f"https://alice.github.io/specter-diy-web-simulator/pr/19/{SHA}/")
         self.assertEqual(status["successful_previews"][0]["head_sha"], SHA)
         self.assertIn("artifacts/123", status["firmware_url"])
+        self.assertEqual(result["firmware_artifacts_to_prune"], [])
 
     def test_pr_generated_javascript_is_replaced_by_trusted_runtime(self):
         req = request()
@@ -355,10 +356,13 @@ class PreviewPublisherTests(unittest.TestCase):
         result = publisher.publish(
             second, self.pages, self.archive, self.firmware, self.runtime, self.trusted, "success",
             SERVICE, SIM_SHA, 202, 1,
-            f"https://github.com/{SERVICE}/actions/runs/202/artifacts/123",
+            f"https://github.com/{SERVICE}/actions/runs/202/artifacts/124",
             "token", lambda *_: live_pr(second),
         )
         self.assertEqual(result["status"], "success")
+        self.assertEqual(result["firmware_artifacts_to_prune"], [
+            {"workflow_run_id": 101, "artifact_id": 123},
+        ])
         result = publisher.publish(
             third, self.pages, self.archive, self.firmware, self.runtime, self.trusted, "failure",
             SERVICE, SIM_SHA, 203, 1, "", "token", lambda *_: live_pr(third),
@@ -370,6 +374,8 @@ class PreviewPublisherTests(unittest.TestCase):
         state = json.loads((self.pages / ".preview-state/pr/19.json").read_text())
         self.assertEqual([entry["head_sha"] for entry in state["successful_previews"]],
                          [second["head_sha"], SHA])
+        self.assertIn("artifacts/124", state["successful_previews"][0]["firmware_url"])
+        self.assertIsNone(state["successful_previews"][1]["firmware_url"])
         status = json.loads((self.pages / "status/pr/19.json").read_text())
         self.assertEqual(status["status"], "failure")
         self.assertEqual(status["preview_url"], state["successful_previews"][0]["preview_url"])
@@ -380,20 +386,28 @@ class PreviewPublisherTests(unittest.TestCase):
         b = request(sha="c" * 40, updated="2026-10-01T12:00:00.000000Z", run_id=102)
         browser_archive(self.archive, b)
         firmware_artifact(self.firmware, b)
-        publisher.publish(b, self.pages, self.archive, self.firmware, self.runtime, self.trusted,
-                          "success", SERVICE, SIM_SHA, 202, 1,
-                          f"https://github.com/{SERVICE}/actions/runs/202/artifacts/123",
-                          "token", lambda *_: live_pr(b))
+        result_b = publisher.publish(b, self.pages, self.archive, self.firmware, self.runtime, self.trusted,
+                                     "success", SERVICE, SIM_SHA, 202, 1,
+                                     f"https://github.com/{SERVICE}/actions/runs/202/artifacts/124",
+                                     "token", lambda *_: live_pr(b))
+        self.assertEqual(result_b["firmware_artifacts_to_prune"], [
+            {"workflow_run_id": 101, "artifact_id": 123},
+        ])
         c = request(sha="d" * 40, updated="2026-10-02T12:00:00.000000Z", run_id=103)
         browser_archive(self.archive, c)
         firmware_artifact(self.firmware, c)
-        publisher.publish(c, self.pages, self.archive, self.firmware, self.runtime, self.trusted,
-                          "success", SERVICE, SIM_SHA, 203, 1,
-                          f"https://github.com/{SERVICE}/actions/runs/203/artifacts/123",
-                          "token", lambda *_: live_pr(c))
+        result_c = publisher.publish(c, self.pages, self.archive, self.firmware, self.runtime, self.trusted,
+                                     "success", SERVICE, SIM_SHA, 203, 1,
+                                     f"https://github.com/{SERVICE}/actions/runs/203/artifacts/125",
+                                     "token", lambda *_: live_pr(c))
+        self.assertEqual(result_c["firmware_artifacts_to_prune"], [
+            {"workflow_run_id": 202, "artifact_id": 124},
+        ])
         state = json.loads((self.pages / ".preview-state/pr/19.json").read_text())
         self.assertEqual([item["head_sha"] for item in state["successful_previews"]],
                          [c["head_sha"], b["head_sha"]])
+        self.assertIn("artifacts/125", state["successful_previews"][0]["firmware_url"])
+        self.assertIsNone(state["successful_previews"][1]["firmware_url"])
         for sha in (a["head_sha"], b["head_sha"], c["head_sha"]):
             self.assertTrue((self.pages / f"pr/19/{sha}/index.html").is_file())
 
@@ -477,6 +491,9 @@ class PreviewPublisherTests(unittest.TestCase):
                                     self.runtime, self.trusted, "deleted", SERVICE, SIM_SHA,
                                     203, 1, "", "token", lambda *_: live_pr(closed, "closed"))
         self.assertEqual(deleted["status"], "deleted")
+        self.assertEqual(deleted["firmware_artifacts_to_prune"], [
+            {"workflow_run_id": 202, "artifact_id": 123},
+        ])
         self.assertFalse((self.pages / "pr/19").exists())
         self.assertFalse((self.pages / "status/pr/19.json").exists())
         old_again = self.apply(older, run_id=101)

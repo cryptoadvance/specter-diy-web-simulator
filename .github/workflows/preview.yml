@@ -198,10 +198,10 @@ jobs:
         id: firmware
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: specter-firmware
+          name: specter-firmware-pr-${{ needs.validate.outputs.pr_number }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: firmware-artifact/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
 
   trusted_runtime:
     name: Build trusted JavaScript runtime from the PR base
@@ -346,7 +346,7 @@ jobs:
       - name: Download firmware artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: specter-firmware
+          name: specter-firmware-pr-${{ needs.validate.outputs.pr_number }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: firmware-artifact
       - name: Download trusted JavaScript runtime
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -442,7 +442,7 @@ jobs:
       group: preview-publish-${{ github.repository }}
       cancel-in-progress: false
     permissions:
-      actions: read
+      actions: write
       contents: write
       pages: write
       id-token: write
@@ -493,7 +493,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: specter-firmware
+          name: specter-firmware-pr-${{ needs.validate.outputs.pr_number }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: firmware-artifact
       - name: Download trusted JavaScript runtime
         if: needs.build.result == 'success' && needs.trusted_runtime.result == 'success' && needs.validate.outputs.action == 'build'
@@ -570,6 +570,22 @@ jobs:
           SPECTER_PREVIEW_APP_TOKEN: ${{ steps.specter-app-token.outputs.token }}
           SPECTER_PREVIEW_APP_SLUG: ${{ steps.specter-app-token.outputs.app-slug }}
         run: python3 simulator/web/tools/report_preview.py
+      - name: Remove replaced PR firmware artifacts
+        id: prune-firmware
+        if: >-
+          always() &&
+          steps.publish.outcome == 'success' &&
+          steps.deployment.outcome == 'success' &&
+          steps.publish.outputs.firmware_artifacts_to_prune != '[]' &&
+          (steps.publish.outputs.applied != 'true' ||
+           needs.validate.outputs.base_repository != 'cryptoadvance/specter-diy' ||
+           steps.report.outcome == 'success')
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+          FIRMWARE_ARTIFACTS_TO_PRUNE: ${{ steps.publish.outputs.firmware_artifacts_to_prune }}
+        run: python3 simulator/web/tools/prune_firmware_artifacts.py
       - name: Add finalization result to the workflow summary
         if: always()
         run: |
@@ -580,3 +596,4 @@ jobs:
           printf 'Trusted verification job: `%s`\n' '${{ needs.verify.result }}' >> "$GITHUB_STEP_SUMMARY"
           printf 'Publication result: `%s`\n' '${{ steps.publish.outputs.status }}' >> "$GITHUB_STEP_SUMMARY"
           printf 'PR comment report: `%s`\n' '${{ steps.report.outcome }}' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Firmware artifact cleanup: `%s`\n' '${{ steps.prune-firmware.outcome }}' >> "$GITHUB_STEP_SUMMARY"
