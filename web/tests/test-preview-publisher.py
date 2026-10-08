@@ -122,7 +122,8 @@ def browser_archive(path: Path, req: dict, tamper=None) -> None:
 
 def firmware_artifact(path: Path, req: dict, tamper=None) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    files = {name: f"firmware:{name}:{req['head_sha']}".encode() for name in publisher.FIRMWARE_FILES}
+    names = publisher.firmware_filenames(req["pr_number"], req["head_sha"])
+    files = {name: f"firmware:{name}:{req['head_sha']}".encode() for name in names}
     records = {name: {"bytes": len(data), "sha256": sha256(data).hexdigest()}
                for name, data in files.items()}
     provenance = {
@@ -141,7 +142,7 @@ def firmware_artifact(path: Path, req: dict, tamper=None) -> None:
     if tamper == "wrong-sha":
         provenance["source_sha"] = "c" * 40
     if tamper == "fake-hash":
-        provenance["files"]["specter-diy.bin"]["sha256"] = "f" * 64
+        provenance["files"][names[0]]["sha256"] = "f" * 64
     for name, data in files.items():
         (path / name).write_bytes(data)
     (path / "source.json").write_text(json.dumps(provenance), encoding="utf-8")
@@ -531,9 +532,10 @@ class PreviewPublisherTests(unittest.TestCase):
         req = request()
         browser_archive(self.archive, req)
         firmware_artifact(self.firmware, req)
-        (self.firmware / "specter-diy.hex").unlink()
+        firmware_bin, firmware_hex = publisher.firmware_filenames(req["pr_number"], req["head_sha"])
+        (self.firmware / firmware_hex).unlink()
         try:
-            (self.firmware / "specter-diy.hex").symlink_to(self.firmware / "specter-diy.bin")
+            (self.firmware / firmware_hex).symlink_to(self.firmware / firmware_bin)
         except OSError:
             self.skipTest("Creating symlinks requires privileges on this Windows host")
         result = publisher.publish(
