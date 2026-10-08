@@ -17,12 +17,12 @@ import tarfile
 
 from validate_preview_request import fetch_pull, parse_time, canonical_time
 from preview_csp import restrict_preview_csp
+from firmware_artifact_names import firmware_filenames
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "browser"))
 from replace_glue import replace_glue
 
 
 ARTIFACTS = ("micropython.wasm", "micropython.data")
-FIRMWARE_FILES = ("specter-diy.bin", "specter-diy.hex")
 MAX_BROWSER_ARCHIVE = 160 * 1024 * 1024
 MAX_FIRMWARE_FILE = 32 * 1024 * 1024
 MAX_RUNTIME_SIZE = 20_000_000
@@ -259,7 +259,8 @@ def _validate_firmware(directory: Path, request: dict, simulator_repository: str
                        simulator_sha: str) -> dict:
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("Missing firmware Actions artifact")
-    expected_names = {*FIRMWARE_FILES, "source.json"}
+    firmware_files = firmware_filenames(request["pr_number"], request["head_sha"])
+    expected_names = {*firmware_files, "source.json"}
     actual_names = set()
     for path in directory.iterdir():
         if path.is_symlink() or not path.is_file() or path.stat().st_nlink > 1:
@@ -289,9 +290,9 @@ def _validate_firmware(directory: Path, request: dict, simulator_repository: str
         elif actual != value:
             raise ValueError(f"Firmware provenance mismatch: {key}")
     files = provenance.get("files")
-    if not isinstance(files, dict) or set(files) != set(FIRMWARE_FILES):
+    if not isinstance(files, dict) or set(files) != set(firmware_files):
         raise ValueError("Firmware provenance has an unexpected file list")
-    for name in FIRMWARE_FILES:
+    for name in firmware_files:
         path = directory / name
         if path.stat().st_size == 0 or path.stat().st_size > MAX_FIRMWARE_FILE:
             raise ValueError("Firmware artifact has an invalid size")
