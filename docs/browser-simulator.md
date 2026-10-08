@@ -170,10 +170,12 @@ run identity, monotonic state, and live PR again before it reports the result.
 The trusted simulator finalizer uses a short-lived GitHub App installation
 token to manage one marked PR conversation comment. Install the App on **only**
 `cryptoadvance/specter-diy` and grant only the **Pull requests: Read and write**
-repository permission. For each accepted result, it deletes only comments from
-that App identity containing `<!-- specter-web-simulator-preview -->`, then
-posts the refreshed comment at the bottom. A closed PR removes all its previews
-and matching App comments.
+repository permission. For each accepted result, it posts the refreshed
+comment first and, only after GitHub confirms creation, deletes older comments
+from that App identity containing `<!-- specter-web-simulator-preview -->`.
+The new comment appears at the bottom. If posting fails, the old comment remains;
+if cleanup fails, a later successful report can remove duplicates. A closed
+PR removes all its previews and matching App comments without posting anew.
 
 Configure these Web Simulator repository settings:
 
@@ -186,6 +188,24 @@ verify the expected comment author. The App needs no Contents, Actions, Issues,
 or Administration permission. Keep `WEB_SIMULATOR_DISPATCH_TOKEN` separately in
 the Specter DIY repository; it only dispatches the Web Simulator workflow and
 is never exposed to the untrusted build job.
+
+### Production merge prerequisite: protect `main`
+
+An organization administrator must configure branch protection or a repository
+ruleset for `cryptoadvance/specter-diy-web-simulator` targeting `main` before
+the service is deployed as the trusted preview publisher:
+
+- Require a maintainer PR review and the `checks` CI status before merging.
+- Prevent direct pushes and force pushes, and avoid broad bypass exceptions.
+- Treat changes to `.github/workflows/` and `web/tools/` as security-sensitive;
+  require review from maintainers who understand the preview trust boundary.
+- Verify the actual branch/ruleset enforcement in GitHub Settings, not just a
+  documented policy or a green status badge.
+
+The `main` branch must be protected because its workflow code can publish
+browser content and, once the App is configured, write to Specter PRs.
+Repository settings, GitHub App installation, Actions secrets and organization
+policy must be configured by an authorized administrator.
 
 The trusted finalizer's `GITHUB_TOKEN` also has `Actions: write` in the Web
 Simulator repository solely to delete superseded firmware artifacts. The App
@@ -276,10 +296,15 @@ Pages deploys it from a Pages artifact created by the trusted finalizer.
 
 This makes the Web Simulator default branch a stronger trust root: a malicious
 change merged there could publish deceptive previews, serve malicious browser
-code, or report false test results. That service intentionally has no reverse
-credential for Specter DIY, so its compromise does not grant access to Specter
-PR comments or repository contents. Review Web Simulator changes with that
-trust trade-off in mind.
+code, or report false test results. The trusted finalizer also holds a short-lived
+GitHub App installation token with `Pull requests: Read and write`, restricted
+to the `cryptoadvance/specter-diy` repository, to manage marked preview
+comments. These GitHub permissions are broader than comments alone: a
+compromised trusted finalizer or App private key could modify other PR metadata
+and comments, but the App has no Contents, Actions, or Administration permission
+and cannot directly modify repository code. The untrusted firmware and browser
+build jobs have no access to this credential. Review changes to the Web Simulator
+default branch and its workflows with that trust trade-off in mind.
 
 The preview workflow pins third-party actions to immutable commit SHAs. Existing
 general-purpose repository checks continue their established version-tag
