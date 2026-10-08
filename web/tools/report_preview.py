@@ -119,6 +119,37 @@ def comment_body(state, action, result, number, site_base, simulator_repository)
     return "\n".join(lines)
 
 
+
+def replace_managed_comment(repository, number, comments, expected_login, token,
+                            body, request_fn=api):
+    """Post a replacement before removing any old App-owned preview comments.
+
+    A failed POST leaves the last useful preview comment untouched. If cleanup
+    fails after the POST, a later successful report removes the duplicates.
+    A closed PR passes body=None and only removes its existing marked comments.
+    """
+    marked = managed_comments(comments, expected_login)
+    old_ids = []
+    for previous in marked:
+        comment_id = previous.get("id")
+        if type(comment_id) is not int or comment_id <= 0:
+            raise ValueError("GitHub returned an invalid comment ID")
+        old_ids.append(comment_id)
+
+    if body is not None:
+        created = request_fn(
+            "POST", f"/repos/{repository}/issues/{number}/comments",
+            token, {"body": body},
+        )
+        if (not isinstance(created, dict) or
+                type(created.get("id")) is not int or created["id"] <= 0):
+            raise ValueError("GitHub returned an invalid created comment ID")
+
+    for comment_id in old_ids:
+        request_fn("DELETE", f"/repos/{repository}/issues/comments/{comment_id}", token)
+    return len(old_ids)
+
+
 def report(request, pages, simulator_repository, simulator_sha, run_id, run_attempt,
            result, token, app_slug, request_fn=api, pull_fetcher=None):
     if request["base_repository"].lower() != TARGET_REPOSITORY:
@@ -159,22 +190,22 @@ def report(request, pages, simulator_repository, simulator_sha, run_id, run_atte
         return {"applied": False, "status": "stale-pr"}
 
     comments = list_comments(request["base_repository"], request["pr_number"], token, request_fn)
-    marked = managed_comments(comments, expected_login)
-    for previous in marked:
-        comment_id = previous.get("id")
-        if type(comment_id) is not int or comment_id <= 0:
-            raise ValueError("GitHub returned an invalid comment ID")
-        request_fn("DELETE", f"/repos/{request['base_repository']}/issues/comments/{comment_id}", token)
     if request["action"] == "delete":
-        return {"applied": True, "status": "deleted", "removed_comments": len(marked)}
+        removed = replace_managed_comment(
+            request["base_repository"], request["pr_number"], comments,
+            expected_login, token, None, request_fn,
+        )
+        return {"applied": True, "status": "deleted", "removed_comments": removed}
 
     owner, repository_name = simulator_repository.split("/", 1)
     site_base = f"https://{owner.lower()}.github.io/{repository_name}/"
     body = comment_body(state, request["action"], result, request["pr_number"],
                         site_base, simulator_repository)
-    request_fn("POST", f"/repos/{request['base_repository']}/issues/{request['pr_number']}/comments",
-               token, {"body": body})
-    return {"applied": True, "status": result, "removed_comments": len(marked)}
+    removed = replace_managed_comment(
+        request["base_repository"], request["pr_number"], comments,
+        expected_login, token, body, request_fn,
+    )
+    return {"applied": True, "status": result, "removed_comments": removed}
 
 
 def report_capacity_evictions(pr_numbers, pages, simulator_repository, simulator_sha,
@@ -219,17 +250,13 @@ def report_capacity_evictions(pr_numbers, pages, simulator_repository, simulator
             continue
 
         comments = list_comments(request["base_repository"], number, token, request_fn)
-        marked = managed_comments(comments, expected_login)
-        for previous in marked:
-            comment_id = previous.get("id")
-            if type(comment_id) is not int or comment_id <= 0:
-                raise ValueError("GitHub returned an invalid comment ID")
-            request_fn("DELETE", f"/repos/{request['base_repository']}/issues/comments/{comment_id}", token)
         body = comment_body(state, "build", "success", number, site_base, simulator_repository)
-        request_fn("POST", f"/repos/{request['base_repository']}/issues/{number}/comments",
-                   token, {"body": body})
+        removed = replace_managed_comment(
+            request["base_repository"], number, comments,
+            expected_login, token, body, request_fn,
+        )
         results.append({"pr_number": number, "status": "reported",
-                        "removed_comments": len(marked)})
+                        "removed_comments": removed})
     return results
 
 
