@@ -551,19 +551,9 @@ jobs:
         if: steps.publish.outcome == 'success'
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
-      - name: Create a short-lived Specter PR comment token
-        if: needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy' && steps.publish.outputs.applied == 'true' && steps.deployment.outcome == 'success'
-        id: specter-app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ vars.SPECTER_PREVIEW_APP_ID }}
-          private-key: ${{ secrets.SPECTER_PREVIEW_APP_PRIVATE_KEY }}
-          owner: cryptoadvance
-          repositories: specter-diy
-          permission-pull-requests: write
-      - name: Revalidate and repost the single Specter PR preview comment
+      - name: Update the single machine-user preview comment
         id: report
-        if: needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy' && steps.publish.outputs.applied == 'true' && steps.deployment.outcome == 'success'
+        if: needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy' && steps.publish.outputs.applied == 'true' && steps.deployment.outcome == 'success' && vars.SPECTER_PREVIEW_BOT_LOGIN != ''
         env:
           REQUEST_ID: ${{ needs.validate.outputs.request_id }}
           ACTION: ${{ needs.validate.outputs.action }}
@@ -579,10 +569,10 @@ jobs:
           SIMULATOR_SHA: ${{ github.sha }}
           BUILD_RESULT: ${{ steps.publish.outputs.status }}
           PAGES_DIR: ${{ github.workspace }}/pages
-          SPECTER_PREVIEW_APP_TOKEN: ${{ steps.specter-app-token.outputs.token }}
-          SPECTER_PREVIEW_APP_SLUG: ${{ steps.specter-app-token.outputs.app-slug }}
+          SPECTER_PREVIEW_BOT_TOKEN: ${{ secrets.SPECTER_PREVIEW_BOT_TOKEN }}
+          SPECTER_PREVIEW_BOT_LOGIN: ${{ vars.SPECTER_PREVIEW_BOT_LOGIN }}
         run: python3 simulator/web/tools/report_preview.py
-      - name: Update PR comments whose previews were removed for Pages capacity
+      - name: Update machine-user PR comments whose previews were evicted
         id: report-capacity-evictions
         if: >-
           steps.prune-pages.outputs.evicted_pr_numbers != '' &&
@@ -590,14 +580,15 @@ jobs:
           steps.publish.outputs.applied == 'true' &&
           steps.deployment.outcome == 'success' &&
           needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy' &&
-          steps.specter-app-token.outcome == 'success'
+          steps.report.outcome == 'success' &&
+          vars.SPECTER_PREVIEW_BOT_LOGIN != ''
         env:
           CAPACITY_EVICTED_PR_NUMBERS: ${{ steps.prune-pages.outputs.evicted_pr_numbers }}
           PAGES_DIR: ${{ github.workspace }}/pages
           SIMULATOR_REPOSITORY: ${{ github.repository }}
           SIMULATOR_SHA: ${{ github.sha }}
-          SPECTER_PREVIEW_APP_TOKEN: ${{ steps.specter-app-token.outputs.token }}
-          SPECTER_PREVIEW_APP_SLUG: ${{ steps.specter-app-token.outputs.app-slug }}
+          SPECTER_PREVIEW_BOT_TOKEN: ${{ secrets.SPECTER_PREVIEW_BOT_TOKEN }}
+          SPECTER_PREVIEW_BOT_LOGIN: ${{ vars.SPECTER_PREVIEW_BOT_LOGIN }}
         run: python3 simulator/web/tools/report_preview.py
       - name: Remove replaced PR firmware artifacts
         id: prune-firmware
