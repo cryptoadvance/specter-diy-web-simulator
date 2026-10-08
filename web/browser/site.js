@@ -1,4 +1,5 @@
 import { validateBuildProvenance } from './build-provenance.js';
+import { isIsolatedPreviewRoute } from './preview-route.js';
 
 const $ = selector => document.querySelector(selector);
 const siteRoot = new URL('../', import.meta.url);
@@ -80,7 +81,7 @@ const virtualHostDetails = $('#virtual-host');
 const virtualHostStatus = $('#virtual-host-status');
 const virtualHostStatusText = $('#virtual-host-status-text');
 const virtualHostPreviewNote = $('#virtual-host-preview-note');
-const isolatedPreviewRoute = /(?:^|\/)pr\/\d+\/$/.test(siteRoot.pathname);
+const isolatedPreviewRoute = isIsolatedPreviewRoute(siteRoot.pathname);
 let virtualHostSocket;
 let virtualHostRetryTimer;
 let virtualHostClientId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;

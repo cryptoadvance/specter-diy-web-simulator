@@ -553,7 +553,7 @@ jobs:
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
       - name: Update the single machine-user preview comment
         id: report
-        if: needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy' && steps.publish.outputs.applied == 'true' && steps.deployment.outcome == 'success' && vars.SPECTER_PREVIEW_BOT_LOGIN != ''
+        if: needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy' && steps.publish.outputs.applied == 'true' && steps.deployment.outcome == 'success'
         env:
           REQUEST_ID: ${{ needs.validate.outputs.request_id }}
           ACTION: ${{ needs.validate.outputs.action }}

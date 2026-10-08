@@ -37,6 +37,7 @@ jobs:
         run: |
           node web/tests/test-demo-data.mjs
           node web/tests/test-build-provenance.mjs
+          node web/tests/test-preview-route.mjs
       - name: Install browser build dependencies
         run: |
           sudo apt-get update

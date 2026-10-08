@@ -106,8 +106,6 @@ def parse_request(inputs: dict, service_repository: str) -> dict:
     if action == "build":
         if not REPOSITORY_RE.fullmatch(head_repository):
             raise ValueError("Build requests require a valid head_repository")
-        if head_repository.rsplit("/", 1)[1].lower() != "specter-diy":
-            raise ValueError("head_repository must be a Specter DIY repository")
         if not _valid_ref(head_ref):
             raise ValueError("Build requests require a valid head_ref")
     elif head_repository:

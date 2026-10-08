@@ -74,6 +74,13 @@ class PreviewRequestTests(unittest.TestCase):
         self.assertEqual(result["base_ref"], BASE_REF)
         self.assertEqual(result["pr_number"], 19)
 
+    def test_renamed_contributor_fork_matches_live_pr(self):
+        renamed = payload()
+        renamed["head_repository"] = "bob/renamed-specter-fork"
+        result = validate_request(renamed, SERVICE, "token",
+                                  lambda *_: pull(repository="bob/renamed-specter-fork"))
+        self.assertEqual(result["head_repository"], "bob/renamed-specter-fork")
+
     def test_service_owner_determines_base_repository(self):
         bad = payload()
         bad["base_repository"] = "bob/specter-diy"

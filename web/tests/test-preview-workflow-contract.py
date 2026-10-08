@@ -201,6 +201,15 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("127.0.0.1:8788", preview_policy)
         self.assertNotIn("localhost:8788", preview_policy)
 
+    def test_production_reporting_does_not_silently_skip_missing_bot_config(self):
+        reporter_step = WORKFLOW.split(
+            "- name: Update the single machine-user preview comment", 1
+        )[1].split("        env:", 1)[0]
+        self.assertIn("steps.deployment.outcome == 'success'", reporter_step)
+        self.assertNotIn("vars.SPECTER_PREVIEW_BOT_LOGIN != ''", reporter_step)
+        self.assertIn("SPECTER_PREVIEW_BOT_TOKEN", WORKFLOW)
+        self.assertIn("SPECTER_PREVIEW_BOT_LOGIN", WORKFLOW)
+
     def test_actions_are_immutable_and_virtual_host_pin_is_consistent(self):
         uses = re.findall(r"uses:\s+[^\s@]+@([^\s#]+)", WORKFLOW)
         self.assertTrue(uses)
