@@ -59,7 +59,7 @@ class PreviewWorkflowContractTests(unittest.TestCase):
                              "go test ./..."):
             self.assertNotIn(trusted_test, build)
 
-    def test_only_always_finalizer_publishes_and_reports_through_narrow_app_token(self):
+    def test_only_trusted_finalizer_holds_machine_user_token(self):
         finalize = job("finalize")
         self.assertIn("always()", finalize)
         self.assertIn("contents: write", finalize)
@@ -69,18 +69,21 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("actions/deploy-pages@", finalize)
         self.assertIn("actions: write", finalize)
         self.assertIn("preview-publish-${{ github.repository }}", finalize)
-        self.assertIn("actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1", finalize)
-        self.assertIn("permission-pull-requests: write", finalize)
-        self.assertIn("repositories: specter-diy", finalize)
-        self.assertIn("owner: cryptoadvance", finalize)
         self.assertIn("needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy'", finalize)
-        self.assertIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", finalize)
+        self.assertIn("SPECTER_PREVIEW_BOT_TOKEN: ${{ secrets.SPECTER_PREVIEW_BOT_TOKEN }}", finalize)
+        self.assertIn("SPECTER_PREVIEW_BOT_LOGIN: ${{ vars.SPECTER_PREVIEW_BOT_LOGIN }}", finalize)
         self.assertIn("python3 simulator/web/tools/report_preview.py", finalize)
+        self.assertNotIn("create-github-app-token", WORKFLOW)
+        self.assertNotIn("permission-pull-requests: write", WORKFLOW)
+        self.assertNotIn("SPECTER_PREVIEW_APP_", WORKFLOW)
         self.assertNotIn("issues: write", WORKFLOW)
         self.assertNotRegex(WORKFLOW, re.compile(r"^      pull-requests: write$", re.MULTILINE))
-        self.assertNotIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", job("build", "trusted_runtime"))
-        self.assertNotIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", job("trusted_runtime", "verify"))
-        self.assertNotIn("SPECTER_PREVIEW_APP_PRIVATE_KEY", job("verify", "finalize"))
+        for trusted_or_untrusted in (job("build", "trusted_runtime"),
+                                     job("trusted_runtime", "verify"),
+                                     job("verify", "finalize"),
+                                     job("validate", "build")):
+            self.assertNotIn("SPECTER_PREVIEW_BOT_TOKEN", trusted_or_untrusted)
+            self.assertNotIn("secrets.SPECTER_PREVIEW_BOT_TOKEN", trusted_or_untrusted)
         self.assertIn("actions: read", job("verify", "finalize"))
         self.assertNotIn("repository: ${{ needs.validate.outputs.head_repository }}", finalize)
         self.assertNotIn("nix develop", finalize)
@@ -89,14 +92,14 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("python3 simulator/web/tools/prune_firmware_artifacts.py", finalize)
         self.assertLess(finalize.index("report_preview.py"),
                         finalize.index("prune_firmware_artifacts.py"))
-        publisher_source = (ROOT / "web/tools/publish_preview.py").read_text()
-        self.assertNotIn("subprocess", publisher_source)
-        self.assertNotIn("os.system", publisher_source)
         reporter = (ROOT / "web/tools/report_preview.py").read_text()
         self.assertIn('MARKER = "<!-- specter-web-simulator-preview -->"', reporter)
         self.assertIn("managed_comments(comments, expected_login)", reporter)
         self.assertIn('request_fn("DELETE",', reporter)
-        self.assertIn('request_fn("POST",', reporter)
+        self.assertIn('"PATCH", f"/repos/{repository}/issues/comments/', reporter)
+        self.assertIn('"POST", f"/repos/{repository}/issues/{number}/comments"', reporter)
+        self.assertIn("verify_machine_user(token, expected_login, request_fn)", reporter)
+        self.assertIn("report_capacity_evictions", reporter)
 
     def test_trusted_javascript_is_built_from_base_on_a_separate_runner(self):
         runtime = job("trusted_runtime", "verify")
