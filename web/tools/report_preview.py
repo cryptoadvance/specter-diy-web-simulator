@@ -178,7 +178,7 @@ def replace_managed_comment(repository, number, comments, expected_login, token,
             )
             if (not isinstance(response, dict) or
                 response.get("id") != survivor["id"] or
-                (response.get("user") or {}).get("expected_login") != expected_login):
+                (response.get("user") or {}).get("login") != expected_login):
                 raise ValueError("Comment update was not confirmed for the expected bot")
         obsolete = ids[1:]
     else:
@@ -188,7 +188,7 @@ def replace_managed_comment(repository, number, comments, expected_login, token,
         )
         if (not isinstance(response, dict) or
             type(response.get("id")) is not int or response["id"] <= 0 or
-            (response.get("user") or {}).get("expected_login") != expected_login):
+            (response.get("user") or {}).get("login") != expected_login):
             raise ValueError("Comment creation was not confirmed for the expected bot")
         obsolete = []
     for cid in obsolete:
