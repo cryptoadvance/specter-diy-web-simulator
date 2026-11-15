@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Offline tests for run-local.sh and build-browser.sh: preflight checks, remote
-# handling, the dirty-checkout warning and switching the firmware revision.
+# handling, the dirty-checkout warning, switching the firmware revision and
+# returning to the default branch when SPECTER_REF is no longer set.
 # Needs no network, no Emscripten and no firmware download.
 #
 # Prerequisites for run-local.sh must be installed (git, python3, gcc, make,
@@ -79,7 +80,7 @@ clone_simulator "$TMP/sim"
 mkdir "$TMP/sim/.browser-work"
 git clone -q --recurse-submodules "$TMP/fw-super" "$TMP/sim/.browser-work/specter-diy"
 FW="$TMP/sim/.browser-work/specter-diy"
-git -C "$FW" checkout -q --force "$P1" && git -C "$FW" submodule update --init --recursive --force -q
+DEFAULT_BRANCH="$(git -C "$FW" symbolic-ref --short HEAD)"   # the clone starts on the default branch (P2)
 
 # 6. A clean checkout prints no warning; an uncommitted change does.
 out="$(SIMULATOR_REPOSITORY=example/simulator FIRMWARE_ONLY=1 "$TMP/sim/run-local.sh" 2>&1)"; status=$?
@@ -91,11 +92,33 @@ if [[ $status -eq 0 && "$out" == *"uncommitted changes"* ]]; then pass "warns ab
 else fail "warns about uncommitted changes" "exit status $status" "$out"; fi
 git -C "$TMP/sim" checkout -q -- README.md
 
-# 7. Switching SPECTER_REF works although the build patched a submodule file.
+# 7. Switching SPECTER_REF to an older revision works although the build patched a submodule file.
 echo "patched by the build" >> "$FW/libs/a.txt"
-out="$(SIMULATOR_REPOSITORY=example/simulator SPECTER_REF="$P2" FIRMWARE_ONLY=1 "$TMP/sim/run-local.sh" 2>&1)"; status=$?
-if [[ $status -eq 0 && "$(cat "$FW/libs/a.txt")" == "v2" ]]; then pass "SPECTER_REF switch over a patched submodule"
+out="$(SIMULATOR_REPOSITORY=example/simulator SPECTER_REF="$P1" FIRMWARE_ONLY=1 "$TMP/sim/run-local.sh" 2>&1)"; status=$?
+if [[ $status -eq 0 && "$(git -C "$FW" rev-parse HEAD)" == "$P1" && "$(cat "$FW/libs/a.txt")" == "v1" ]]; then
+  pass "SPECTER_REF switch over a patched submodule"
 else fail "SPECTER_REF switch over a patched submodule" "exit status $status, libs/a.txt: $(cat "$FW/libs/a.txt")" "$out"; fi
+
+# 8. A later run without SPECTER_REF returns to the default branch instead of
+#    quietly building the older revision. The firmware here is detached at P1.
+echo "patched by the build" >> "$FW/libs/a.txt"
+out="$(SIMULATOR_REPOSITORY=example/simulator FIRMWARE_ONLY=1 "$TMP/sim/run-local.sh" 2>&1)"; status=$?
+if [[ $status -eq 0 && "$(git -C "$FW" symbolic-ref --short HEAD 2>/dev/null)" == "$DEFAULT_BRANCH"       && "$(git -C "$FW" rev-parse HEAD)" == "$P2" && "$(cat "$FW/libs/a.txt")" == "v2"       && "$out" == *"switching back to the default branch"* ]]; then
+  pass "plain run returns to the default branch after SPECTER_REF"
+else fail "plain run returns to the default branch after SPECTER_REF" "exit status $status, HEAD: $(git -C "$FW" rev-parse HEAD)" "$out"; fi
+
+# 9. A local branch checked out by hand is also replaced by the default branch, and the
+#    firmware is left untouched when the default branch is already selected.
+git -C "$FW" checkout -q -b other "$P1" && git -C "$FW" submodule update --init --recursive --force -q
+out="$(SIMULATOR_REPOSITORY=example/simulator FIRMWARE_ONLY=1 "$TMP/sim/run-local.sh" 2>&1)"; status=$?
+if [[ $status -eq 0 && "$(git -C "$FW" symbolic-ref --short HEAD)" == "$DEFAULT_BRANCH" ]]; then
+  pass "plain run leaves another branch for the default branch"
+else fail "plain run leaves another branch for the default branch" "exit status $status" "$out"; fi
+echo "local edit" >> "$FW/libs/a.txt"
+out="$(SIMULATOR_REPOSITORY=example/simulator FIRMWARE_ONLY=1 "$TMP/sim/run-local.sh" 2>&1)"; status=$?
+if [[ $status -eq 0 && "$out" != *"switching back"* && "$(tail -n1 "$FW/libs/a.txt")" == "local edit" ]]; then
+  pass "plain run does nothing when the default branch is already selected"
+else fail "plain run does nothing when the default branch is already selected" "exit status $status" "$out"; fi
 
 echo
 if [[ $failures -eq 0 ]]; then echo "All run-local tests passed."; else echo "$failures test(s) failed."; exit 1; fi

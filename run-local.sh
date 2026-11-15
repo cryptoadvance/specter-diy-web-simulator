@@ -5,6 +5,7 @@
 #   PORT=9000 ./run-local.sh       serve on another port
 #   BUILD_ONLY=1 ./run-local.sh    build and verify, do not start the server
 #   SPECTER_REF=<tag|branch|sha> ./run-local.sh   simulate another firmware revision
+#                                  (without it, the default branch is restored)
 #   FIRMWARE_ONLY=1 ./run-local.sh fetch/select the firmware revision, then stop
 #   SERVE_ONLY=1 ./run-local.sh    serve an existing build without rebuilding
 #   BIND=0.0.0.0 ./run-local.sh    listen on all interfaces (default: 127.0.0.1 only)
@@ -81,12 +82,35 @@ if [[ ! -d "$FIRMWARE/.git" ]]; then
 else
   echo "Using existing $FIRMWARE"
 fi
+# --force: an earlier build patched files inside the submodules, and git
+# refuses to switch a submodule commit over locally modified files without it.
+switch_firmware() {
+  git -C "$FIRMWARE" checkout --force "$1"
+  git -C "$FIRMWARE" submodule update --init --recursive --force
+}
 if [[ -n "${SPECTER_REF:-}" ]]; then
   git -C "$FIRMWARE" fetch --tags origin
-  git -C "$FIRMWARE" checkout --force "$SPECTER_REF"
-  # --force: an earlier build patched files inside the submodules, and git
-  # refuses to switch a submodule commit over locally modified files without it.
-  git -C "$FIRMWARE" submodule update --init --recursive --force
+  switch_firmware "$SPECTER_REF"
+else
+  # Without SPECTER_REF the default firmware branch is built, also after an
+  # earlier run with SPECTER_REF left the clone on another revision. This does
+  # not fetch: it returns to the branch as last fetched, so plain runs stay offline.
+  default_branch="$(git -C "$FIRMWARE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  default_branch="${default_branch#origin/}"
+  if [[ -z "$default_branch" ]]; then
+    for candidate in master main; do
+      if git -C "$FIRMWARE" show-ref --verify --quiet "refs/remotes/origin/$candidate"; then
+        default_branch="$candidate"; break
+      fi
+    done
+  fi
+  [[ -n "$default_branch" ]] || die "Cannot tell the default branch of $FIRMWARE. Select a revision:
+  SPECTER_REF=<tag|branch|sha> ./run-local.sh   (or delete .browser-work and retry)"
+  current_branch="$(git -C "$FIRMWARE" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [[ "$current_branch" != "$default_branch" ]]; then
+    echo "Firmware is on ${current_branch:-a detached commit $(git -C "$FIRMWARE" rev-parse --short HEAD)}; SPECTER_REF is not set, so switching back to the default branch '$default_branch'."
+    switch_firmware "$default_branch"
+  fi
 fi
 
 [[ "${FIRMWARE_ONLY:-0}" = 1 ]] && { echo "Firmware ready in $FIRMWARE."; exit 0; }

@@ -57,7 +57,7 @@ downloads and only rebuild. Options are environment variables:
 | `FIRMWARE_ONLY=1` | fetch or select the firmware revision (with `SPECTER_REF`), then stop |
 | `SERVE_ONLY=1` | serve the existing build without rebuilding |
 | `BIND=0.0.0.0` | listen on all network interfaces instead of only `127.0.0.1` |
-| `SPECTER_REF=<tag, branch or sha>` | simulate that firmware revision instead of the default branch |
+| `SPECTER_REF=<tag, branch or sha>` | simulate that firmware revision instead of the default branch; a later run without it switches back to the default branch (as last fetched, without a network access) |
 
 Do not open `web/index.html` directly from disk: the page fetches the build
 files over HTTP.
