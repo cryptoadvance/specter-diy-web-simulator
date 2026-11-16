@@ -4,7 +4,7 @@
   "scripts": {
     "test:browser": "node tests/test-demo-data.mjs && node tests/test-site.mjs && node tests/test-inspector.mjs && node tests/test-qr.mjs && node tests/test-camera.mjs && node tests/test-card.mjs",
     "test:compat": "node tests/test-compat.mjs",
-    "test:provenance": "node tests/test-build-provenance.mjs"
+    "test:provenance": "node tests/test-build-provenance.mjs && node tests/test-preview-route.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0",
