@@ -6,8 +6,11 @@ import sys
 
 path = Path(sys.argv[1])
 source = path.read_text()
-normalized, count = re.subn(r'(?m)^\s*// (?:end )?include: /tmp/tmp[a-z0-9_]+\.js\s*$',
-                            '', source)
+normalized, count = re.subn(
+    r'(?m)^\s*// (?:end )?include: .*\btmp[a-z0-9_]+\.js\s*$',
+    '',
+    source,
+)
 if count < 2:
     raise RuntimeError('Emscripten pre-JS markers changed; inspect generated glue')
 path.write_text(normalized)

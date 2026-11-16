@@ -26,6 +26,7 @@ RUN apt-get update \
       ca-certificates xz-utils \
  && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --shell /bin/bash sim
+RUN install -d --owner=sim --group=sim /home/sim/specter-diy-web-simulator
 USER sim
 WORKDIR /home/sim/specter-diy-web-simulator
 COPY --chown=sim:sim . .

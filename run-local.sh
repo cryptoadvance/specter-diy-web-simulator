@@ -57,9 +57,12 @@ fi
 
 # The build records which simulator checkout produced it. Check this now so a
 # problem shows up in seconds, not after the downloads.
-if ! git -C "$HERE" rev-parse HEAD >/dev/null 2>&1; then
-  die "$HERE is not a git clone (a ZIP download has no history). Use:
+if ! simulator_commit="$(git -C "$HERE" rev-parse HEAD 2>&1)"; then
+  if [[ ! -e "$HERE/.git" ]]; then
+    die "$HERE is not a git clone (no .git metadata). Use:
   git clone https://github.com/cryptoadvance/specter-diy-web-simulator.git"
+  fi
+  die "$HERE is not a usable git checkout: $simulator_commit"
 fi
 if [[ -z "${SIMULATOR_REPOSITORY:-}" ]]; then
   origin="$(git -C "$HERE" remote get-url origin 2>/dev/null || true)"
@@ -71,7 +74,7 @@ fi
 
 if [[ -n "$(git -C "$HERE" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
   echo "WARNING: this checkout has uncommitted changes. The build records only the commit" >&2
-  echo "         ($(git -C "$HERE" rev-parse --short HEAD)), which does not describe them." >&2
+  echo "         (${simulator_commit:0:7}), which does not describe them." >&2
 fi
 
 mkdir -p "$WORK"
