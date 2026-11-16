@@ -69,6 +69,7 @@ class PreviewWorkflowContractTests(unittest.TestCase):
         self.assertIn("actions/deploy-pages@", finalize)
         self.assertIn("actions: write", finalize)
         self.assertIn("preview-publish-${{ github.repository }}", finalize)
+        self.assertIn("queue: max", finalize)
         self.assertIn("needs.validate.outputs.base_repository == 'cryptoadvance/specter-diy'", finalize)
         self.assertIn("SPECTER_PREVIEW_BOT_TOKEN: ${{ secrets.SPECTER_PREVIEW_BOT_TOKEN }}", finalize)
         self.assertIn("SPECTER_PREVIEW_BOT_LOGIN: ${{ vars.SPECTER_PREVIEW_BOT_LOGIN }}", finalize)

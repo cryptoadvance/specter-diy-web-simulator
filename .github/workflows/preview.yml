@@ -443,6 +443,7 @@ jobs:
     concurrency:
       group: preview-publish-${{ github.repository }}
       cancel-in-progress: false
+      queue: max  # Preserve queued PR-close cleanup when other PRs finish builds
     permissions:
       actions: write
       contents: write
