@@ -1,0 +1,12 @@
+# Allow-list: only what the build stage needs. .git provides the simulator
+# commit and repository for the provenance record and stays in the build stage;
+# it is not part of the final image.
+*
+!.git
+!run-local.sh
+!web
+web/node_modules
+web/test-results
+web/builds
+web/browser/current.json
+**/__pycache__

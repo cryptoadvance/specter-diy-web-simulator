@@ -1,0 +1,5 @@
+# Normalise line endings to LF in every checkout, including on Windows.
+# Shell scripts (and the Docker build) fail on "\r", and the frozen runtime
+# files should be identical on every platform.
+* text=auto eol=lf
+*.png binary

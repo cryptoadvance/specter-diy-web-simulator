@@ -29,6 +29,10 @@ executes code from an untrusted PR in the visitor's browser.
 
 ## Manual build
 
+For a one-command build and local server, see
+[Run it locally](../README.md#run-it-locally): `run-local.sh` on Linux, Docker
+on Windows and macOS. The steps below are the manual equivalent.
+
 Choose both a source repository and its exact full commit SHA. For a contributor
 PR, use the contributor's source repository and the PR head SHA; the base
 repository still determines which paired Web Simulator receives CI requests.
@@ -65,6 +69,22 @@ under `specter-diy-web-simulator/web/builds/<owner>/<repo>/<source-sha>/` and
 the current-build pointer is `web/browser/current.json`. The browser manifest
 records the source repository/SHA, simulator repository/SHA, toolchain, and
 SHA256 and size for each generated file.
+
+Provenance defaults when the environment variables are not set:
+
+| Value | Default |
+| --- | --- |
+| Source repository | `SPECTER_SOURCE_REPOSITORY`, else `GITHUB_REPOSITORY`, else the `origin` remote of `SPECTER_SRC` |
+| Source commit | `HEAD` of `SPECTER_SRC` |
+| Simulator repository | `SIMULATOR_REPOSITORY`, else the `origin` remote of this repository's checkout |
+| Simulator commit | `SIMULATOR_COMMIT`, else `HEAD` of this repository's checkout |
+
+Set `SPECTER_SOURCE_REPOSITORY=owner/repo`, `SIMULATOR_REPOSITORY=owner/repo`,
+and `SIMULATOR_COMMIT=<full-sha>` when the checkouts have no GitHub `origin`
+remote, or when building source and tooling from different repositories. The
+simulator values are never taken from the firmware checkout. If the checkout has
+uncommitted changes, the recorded commit does not describe them; `run-local.sh`
+prints a warning in that case, the manifest does not record it.
 
 Run the firmware and browser tests used by CI:
 
@@ -111,6 +131,27 @@ revision recorded in `.preview-config/virtual-host-commit`; they never use the
 moving `main` branch. To update the pin, review a specific Virtual Host commit,
 change both the pin file and the workflow's checkout SHA, then run the full
 USB VCP and USB transport checks.
+
+### Troubleshooting
+
+| Message or symptom | Cause and fix |
+| --- | --- |
+| `Emscripten 3.1.74 is required` | `emcc` is not on `PATH`. Run `source /path/to/emsdk/emsdk_env.sh` in the same shell, or set `EMSDK_ENV` to that file. |
+| `Expected Emscripten 3.1.74` | Another version is active. Run `emsdk install 3.1.74 && emsdk activate 3.1.74`, then source `emsdk_env.sh` again. |
+| `SPECTER_SRC=... is not a Specter-DIY checkout` | `SPECTER_SRC` must point to a clone of `cryptoadvance/specter-diy`. Without it the script looks at this repository. |
+| `Invalid source repository` | The firmware checkout has no GitHub `origin` remote. Set `SPECTER_SOURCE_REPOSITORY=owner/repo`. |
+| `Cannot determine simulator repository/commit` | This checkout is not a git clone with an `origin` remote. Set `SIMULATOR_REPOSITORY` and `SIMULATOR_COMMIT`. |
+| Missing files or errors under `f469-disco/micropython` or `usermods` | The firmware was cloned without submodules. Run `git -C /path/to/specter-diy submodule update --init --recursive` (the build script also runs this). |
+| Compilation errors after switching firmware commits | Patches from a previous build may remain in the checkout. Use a fresh clone of `specter-diy`. |
+| The page shows no simulator or a failed load | Build first, then serve over HTTP (`python3 -m http.server 8765 --directory web`). The page needs `web/browser/current.json` and the files in `web/builds/`. |
+| `Missing: ...` from `run-local.sh` | Install the packages it lists with the `apt-get` command it prints. |
+| `... is not a git clone` | The simulator was downloaded as a ZIP. Use `git clone` instead. |
+| `Cannot tell the GitHub owner/repo of this clone` | The clone's `origin` is not on GitHub (a mirror or local path). Run `SIMULATOR_REPOSITORY=owner/repo ./run-local.sh`. |
+| `destination path 'specter-diy-web-simulator' already exists` | An earlier clone is in the current folder. Remove it (`rm -rf specter-diy-web-simulator`) or `cd` into it and run `./run-local.sh`. |
+| Strange build errors after an interrupted run | Delete `.browser-work/` and run `./run-local.sh` again. |
+| `ports are not available` / `bind: Only one usage of each socket address` (Docker) | Port 8765 is in use. Map another host port: `docker run --rm -p 127.0.0.1:9000:8765 specter-sim`, then open `http://localhost:9000/`. |
+| `docker build` fails with `\r` or "No such file or directory" for a script | Line endings were converted on checkout. The repository's `.gitattributes` prevents this for fresh clones; re-clone or run `git add --renormalize .`. |
+| `Address already in use` | Another process uses port 8765. Pick another port in the `http.server` command and URL. |
 
 ## Set up paired forks
 

@@ -42,6 +42,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes build-essential pkg-config libffi-dev libreadline-dev
+      - name: Test run-local.sh and the build script preflight checks
+        run: bash web/tests/test-run-local.sh
       - uses: actions/checkout@v4
         with:
           repository: cryptoadvance/specter-diy
@@ -63,14 +65,16 @@ jobs:
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           simulator_commit="$(git rev-parse HEAD)"
           source_commit="$(git -C "$GITHUB_WORKSPACE/specter-diy" rev-parse HEAD)"
+          # SIMULATOR_REPOSITORY and SIMULATOR_COMMIT are deliberately not set
+          # here: the build must derive them from this checkout, as a local
+          # build does. verify_build.py then checks them against the expected
+          # values below.
           SPECTER_SRC="$GITHUB_WORKSPACE/specter-diy" \
             SPECTER_SOURCE_REPOSITORY=cryptoadvance/specter-diy \
-            SIMULATOR_REPOSITORY=cryptoadvance/specter-diy-web-simulator \
-            SIMULATOR_COMMIT="$simulator_commit" \
             bash web/browser/build-browser.sh
           EXPECTED_SHA="$source_commit" \
             SPECTER_SOURCE_REPOSITORY=cryptoadvance/specter-diy \
-            SIMULATOR_REPOSITORY=cryptoadvance/specter-diy-web-simulator \
+            SIMULATOR_REPOSITORY="$GITHUB_REPOSITORY" \
             SIMULATOR_COMMIT="$simulator_commit" \
             python3 web/browser/verify_build.py
       - name: Install Chromium for browser UI tests
@@ -87,3 +91,42 @@ jobs:
           CI=true TEST_BASE_URL=http://127.0.0.1:8765/ node web/tests/test-inspector.mjs
           CI=true TEST_BASE_URL=http://127.0.0.1:8765/ node web/tests/test-network-policy.mjs
           CI=true TEST_BASE_URL=http://127.0.0.1:8765/ node web/tests/test-site.mjs
+
+  docker:
+    name: docker (build the image, serve it, check contents and provenance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build the Docker image
+        run: docker build --tag specter-sim .
+      - name: Check the final image contents
+        run: |
+          # No git metadata, tests, tools or untracked files in the image that is served.
+          docker run --rm --entrypoint sh specter-sim -c '
+            test -f /site/web/index.html &&
+            test -f /site/web/browser/current.json &&
+            test ! -e /site/.git &&
+            test ! -e /site/web/.git &&
+            test ! -e /site/web/tests &&
+            test ! -e /site/web/tools'
+      - name: Serve the image and check the recorded provenance
+        run: |
+          docker run --detach --name sim --publish 127.0.0.1:8765:8765 specter-sim
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8765/ >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8765/ >/dev/null
+          build="$(curl --fail --silent http://127.0.0.1:8765/browser/current.json \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["build"])')"
+          info="$(curl --fail --silent "http://127.0.0.1:8765/${build}build-info.json")"
+          python3 -c '
+          import json, sys
+          simulator = json.loads(sys.argv[1])["simulator"]
+          assert simulator["commit"] == sys.argv[2], (simulator, sys.argv[2])
+          assert simulator["repository"].lower() == sys.argv[3].lower(), (simulator, sys.argv[3])
+          print("provenance ok:", simulator["repository"], simulator["commit"][:12])
+          ' "$info" "$(git rev-parse HEAD)" "$GITHUB_REPOSITORY"
