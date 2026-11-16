@@ -30,6 +30,9 @@ catch (error) {
     requests: requests.filter(url => /current\.json|build-info|micropython|browser\.js/.test(url)) }, null, 2));
   throw error;
 }
+if (await page.locator('#fork-preview-warning').isVisible()) {
+  throw new Error('The fork warning must stay hidden on the normal firmware page');
+}
 // The under-device source link must identify the exact firmware revision,
 // including on PR preview builds that have no optional PR metadata.
 const underDevice = await page.evaluate(async () => {

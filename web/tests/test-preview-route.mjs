@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { isIsolatedPreviewRoute } from '../browser/preview-route.js';
+import { getForkPreviewDetails, isIsolatedPreviewRoute } from '../browser/preview-route.js';
 
 const sha = 'a'.repeat(40);
 for (const path of [
@@ -14,4 +14,21 @@ for (const path of [
 ]) {
   assert.equal(isIsolatedPreviewRoute(path), false, `Unexpected isolated preview: ${path}`);
 }
-console.log('Preview route isolation tests passed.');
+
+const simulatorRepository = 'cryptoadvance/specter-diy-web-simulator';
+const sourceCommit = 'b'.repeat(40);
+assert.deepEqual(getForkPreviewDetails(`/pr/440/${sourceCommit}/`,
+  'schnuartz-ai/specter-diy', simulatorRepository, sourceCommit), {
+  number: 440, repository: 'schnuartz-ai/specter-diy', commit: sourceCommit,
+});
+assert.equal(getForkPreviewDetails(`/pr/440/${sourceCommit}/`,
+  'cryptoadvance/specter-diy', simulatorRepository, sourceCommit), null,
+'same-owner PR previews from cryptoadvance must not be labeled as forks');
+assert.equal(getForkPreviewDetails('/', 'schnuartz-ai/specter-diy',
+  simulatorRepository, sourceCommit), null,
+'the normal firmware page must not show a fork preview warning');
+assert.equal(getForkPreviewDetails(`/pr/440/${sha}/`, 'schnuartz-ai/specter-diy',
+  simulatorRepository, sourceCommit), null,
+'a preview with a mismatched URL commit must not claim different provenance');
+
+console.log('Preview route and fork warning tests passed.');

@@ -1,5 +1,5 @@
 import { validateBuildProvenance } from './build-provenance.js';
-import { isIsolatedPreviewRoute } from './preview-route.js';
+import { getForkPreviewDetails, isIsolatedPreviewRoute } from './preview-route.js';
 
 const $ = selector => document.querySelector(selector);
 const siteRoot = new URL('../', import.meta.url);
@@ -1187,6 +1187,25 @@ function formatBuildPresentation(manifest) {
 }
 function updateBuildMetadata(manifest) {
   const buildPresentation = formatBuildPresentation(manifest);
+  const forkPreviewWarning = $('#fork-preview-warning');
+  if (forkPreviewWarning) {
+    const forkPreview = getForkPreviewDetails(siteRoot.pathname,
+      buildPresentation.repository, buildPresentation.simulatorRepository, buildPresentation.commit);
+    if (forkPreview) {
+      const repositoryLink = $('#fork-preview-repository');
+      repositoryLink.href = `https://github.com/${forkPreview.repository}`;
+      repositoryLink.textContent = forkPreview.repository;
+      $('#fork-preview-number').textContent = `PR #${forkPreview.number}`;
+      const commitLink = $('#fork-preview-commit');
+      commitLink.href = `https://github.com/${forkPreview.repository}/commit/${forkPreview.commit}`;
+      commitLink.title = `Full source commit: ${forkPreview.commit}`;
+      commitLink.setAttribute('aria-label', `Source commit ${forkPreview.commit}`);
+      commitLink.querySelector('code').textContent = forkPreview.commit.slice(0, 12);
+      forkPreviewWarning.hidden = false;
+    } else {
+      forkPreviewWarning.hidden = true;
+    }
+  }
   const sourceCommitLink = $('#source-commit-link');
   if (sourceCommitLink) {
     sourceCommitLink.href = buildPresentation.commitUrl;
