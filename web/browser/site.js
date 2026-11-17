@@ -1195,7 +1195,8 @@ function updateBuildMetadata(manifest) {
       const repositoryLink = $('#fork-preview-repository');
       repositoryLink.href = `https://github.com/${forkPreview.repository}`;
       repositoryLink.textContent = forkPreview.repository;
-      $('#fork-preview-number').textContent = `PR #${forkPreview.number}`;
+      $('#fork-preview-number').textContent = `PR #${forkPreview.number}` +
+        (forkPreview.commitMismatch ? ' · WARNING: URL commit differs from the loaded build' : '');
       const commitLink = $('#fork-preview-commit');
       commitLink.href = `https://github.com/${forkPreview.repository}/commit/${forkPreview.commit}`;
       commitLink.title = `Full source commit: ${forkPreview.commit}`;
