@@ -19,9 +19,8 @@ export function getForkPreviewDetails(pathname, sourceRepository, simulatorRepos
   // The paired-service validator requires the base repository to share this owner.
   const baseOwner = simulatorRepository.split('/')[0];
   if (sourceOwner.toLowerCase() === baseOwner.toLowerCase()) return null;
-  if (route.commit && route.commit !== sourceCommit) return null;
-
-  return { number: route.number, repository: sourceRepository, commit: sourceCommit };
+  return { number: route.number, repository: sourceRepository, commit: sourceCommit,
+    commitMismatch: Boolean(route.commit && route.commit !== sourceCommit) };
 }
 
 /** Identify isolated Specter PR previews, including commit-specific URLs. */
