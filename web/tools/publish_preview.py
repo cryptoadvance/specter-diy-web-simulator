@@ -628,6 +628,15 @@ def publish(request: dict, pages: Path, browser_archive: Path, firmware_dir: Pat
                 staged = Path(temp) / "preview"
                 staged.mkdir()
                 _copy_trusted_shell(trusted_web, staged)
+                # Generated only by the trusted publisher, never copied from a PR artifact.
+                # Binds the URL's PR number and commit to the live-validated source.
+                _write_json(staged, staged / "preview-provenance.json", {
+                    "schema": 1,
+                    "pr_number": request["pr_number"],
+                    "base_repository": request["base_repository"],
+                    "source_repository": request["head_repository"],
+                    "source_sha": request["head_sha"],
+                })
                 shutil.copytree(extracted / "browser", staged / "browser", dirs_exist_ok=True)
                 shutil.copytree(extracted / "builds", staged / "builds", dirs_exist_ok=True)
                 _assert_no_symlinks(staged)
