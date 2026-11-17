@@ -20,6 +20,7 @@ const sourceCommit = 'b'.repeat(40);
 assert.deepEqual(getForkPreviewDetails(`/pr/440/${sourceCommit}/`,
   'schnuartz-ai/specter-diy', simulatorRepository, sourceCommit), {
   number: 440, repository: 'schnuartz-ai/specter-diy', commit: sourceCommit,
+  commitMismatch: false,
 });
 assert.equal(getForkPreviewDetails(`/pr/440/${sourceCommit}/`,
   'cryptoadvance/specter-diy', simulatorRepository, sourceCommit), null,
@@ -27,8 +28,10 @@ assert.equal(getForkPreviewDetails(`/pr/440/${sourceCommit}/`,
 assert.equal(getForkPreviewDetails('/', 'schnuartz-ai/specter-diy',
   simulatorRepository, sourceCommit), null,
 'the normal firmware page must not show a fork preview warning');
-assert.equal(getForkPreviewDetails(`/pr/440/${sha}/`, 'schnuartz-ai/specter-diy',
-  simulatorRepository, sourceCommit), null,
-'a preview with a mismatched URL commit must not claim different provenance');
+assert.deepEqual(getForkPreviewDetails(`/pr/440/${sha}/`, 'schnuartz-ai/specter-diy',
+  simulatorRepository, sourceCommit), {
+  number: 440, repository: 'schnuartz-ai/specter-diy', commit: sourceCommit,
+  commitMismatch: true,
+}, 'a preview with a mismatched URL commit must retain its fork warning');
 
 console.log('Preview route and fork warning tests passed.');
