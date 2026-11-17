@@ -436,12 +436,12 @@
 </head>
 <body>
 
-<aside id="fork-preview-warning" class="fork-preview-warning" hidden role="note" aria-label="Untrusted fork preview" aria-live="polite">
+<aside id="fork-preview-warning" class="fork-preview-warning" hidden role="note" aria-label="PR preview provenance warning" aria-live="polite">
   <div class="fork-preview-warning-inner">
     <span class="fork-preview-warning-icon" aria-hidden="true">!</span>
     <div class="fork-preview-warning-copy">
-      <p class="fork-preview-warning-title">UNTRUSTED PREVIEW FROM <a id="fork-preview-repository" target="_blank" rel="noopener noreferrer"></a></p>
-      <p class="fork-preview-warning-details"><span id="fork-preview-number"></span> · Commit <a id="fork-preview-commit" target="_blank" rel="noopener noreferrer"><code></code></a></p>
+      <p class="fork-preview-warning-title"><span id="fork-preview-title">UNVERIFIED PR PREVIEW</span> <a id="fork-preview-repository" hidden target="_blank" rel="noopener noreferrer"></a></p>
+      <p class="fork-preview-warning-details"><span id="fork-preview-number"></span><span id="fork-preview-commit-detail" hidden> · Commit <a id="fork-preview-commit" target="_blank" rel="noopener noreferrer"><code></code></a></span></p>
     </div>
   </div>
 </aside>
@@ -624,6 +624,6 @@
 </footer>
 
 <script src="./assets/jsQR-1.4.0.js"></script>
-<script type="module" src="./browser/site.js?v=20261116-fork-preview-warning"></script>
+<script type="module" src="./browser/site.js?v=20261117-publisher-provenance"></script>
 </body>
 </html>
