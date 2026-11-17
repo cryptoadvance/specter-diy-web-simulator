@@ -262,11 +262,12 @@ class PreviewPublisherTests(unittest.TestCase):
 
     def test_missing_or_duplicate_placeholder_rejects_preview(self):
         original = (self.trusted / "index.html").read_text()
-        for invalid in (original.replace("<!-- PR_PREVIEW_WARNING -->", ""),
-                        original + "<!-- PR_PREVIEW_WARNING -->"):
+        for index, invalid in enumerate((original.replace("<!-- PR_PREVIEW_WARNING -->", ""),
+                                         original + "<!-- PR_PREVIEW_WARNING -->")):
             with self.subTest(invalid=invalid.count("PR_PREVIEW_WARNING")):
                 (self.trusted / "index.html").write_text(invalid)
-                self.assertEqual(self.apply(request())["status"], "failure")
+                self.assertEqual(self.apply(request(run_id=101 + index),
+                                            run_id=101 + index)["status"], "failure")
 
     def test_pr_generated_javascript_is_replaced_by_trusted_runtime(self):
         req = request()
