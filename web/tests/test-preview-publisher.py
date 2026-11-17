@@ -109,6 +109,16 @@ def browser_archive(path: Path, req: dict, tamper=None) -> None:
         record.update(bytes=len(entries[prefix + "build-info.json"]),
                       sha256=sha256(entries[prefix + "build-info.json"]).hexdigest())
         entries["manifest.json"] = json.dumps(manifest).encode()
+    elif tamper in ("wrong-simulator-repo", "missing-simulator"):
+        if tamper == "wrong-simulator-repo":
+            build_info["simulator"]["repository"] = SOURCE
+        else:
+            del build_info["simulator"]
+        entries[prefix + "build-info.json"] = json.dumps(build_info).encode()
+        record = manifest["files"][prefix + "build-info.json"]
+        record.update(bytes=len(entries[prefix + "build-info.json"]),
+                      sha256=sha256(entries[prefix + "build-info.json"]).hexdigest())
+        entries["manifest.json"] = json.dumps(manifest).encode()
     elif tamper == "untrusted-js":
         entries[prefix + "micropython.js"] = b"PR controlled JavaScript"
 
@@ -191,7 +201,7 @@ class PreviewPublisherTests(unittest.TestCase):
         (self.trusted / "index.html").write_text(
             '<meta http-equiv="Content-Security-Policy" content="script-src \'self\'; '
             "connect-src 'self' http://127.0.0.1:8788 ws://127.0.0.1:8788; "
-            'object-src \'none\'">',
+            'object-src \'none\'"><!-- PR_PREVIEW_WARNING -->',
             encoding="utf-8",
         )
         (self.trusted / "browser/site.js").write_text("trusted UI")
@@ -220,10 +230,12 @@ class PreviewPublisherTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertTrue(result["applied"])
         published_html = (preview / "index.html").read_text(encoding="utf-8")
-        self.assertEqual(json.loads((preview / "preview-provenance.json").read_text()), {
-            "schema": 1, "pr_number": 19, "base_repository": BASE,
-            "source_repository": SOURCE, "source_sha": SHA,
-        })
+        self.assertIn('UNTRUSTED PREVIEW FROM', published_html)
+        self.assertIn(f'href="https://github.com/{SOURCE}"', published_html)
+        self.assertIn(f'href="https://github.com/{SOURCE}/commit/{SHA}"', published_html)
+        self.assertIn("PR #19", published_html)
+        self.assertNotIn("<!-- PR_PREVIEW_WARNING -->", published_html)
+        self.assertFalse((preview / "preview-provenance.json").exists())
         self.assertIn("connect-src 'self'", published_html)
         self.assertNotIn("127.0.0.1:8788", published_html)
         self.assertNotIn("localhost:8788", published_html)
@@ -238,6 +250,23 @@ class PreviewPublisherTests(unittest.TestCase):
         self.assertEqual(status["successful_previews"][0]["head_sha"], SHA)
         self.assertIn("artifacts/123", status["firmware_url"])
         self.assertEqual(result["firmware_artifacts_to_prune"], [])
+
+    def test_same_owner_preview_has_no_fork_warning(self):
+        req = request()
+        req["head_repository"] = BASE
+        self.assertEqual(self.apply(req)["status"], "success")
+        html = (self.pages / f"pr/19/{SHA}/index.html").read_text()
+        self.assertNotIn("UNTRUSTED PREVIEW FROM", html)
+        self.assertNotIn("PR_PREVIEW_WARNING", html)
+        self.assertFalse((self.pages / f"pr/19/{SHA}/preview-provenance.json").exists())
+
+    def test_missing_or_duplicate_placeholder_rejects_preview(self):
+        original = (self.trusted / "index.html").read_text()
+        for invalid in (original.replace("<!-- PR_PREVIEW_WARNING -->", ""),
+                        original + "<!-- PR_PREVIEW_WARNING -->"):
+            with self.subTest(invalid=invalid.count("PR_PREVIEW_WARNING")):
+                (self.trusted / "index.html").write_text(invalid)
+                self.assertEqual(self.apply(request())["status"], "failure")
 
     def test_pr_generated_javascript_is_replaced_by_trusted_runtime(self):
         req = request()
@@ -320,7 +349,8 @@ class PreviewPublisherTests(unittest.TestCase):
                 archive.addfile(info, BytesIO(data) if info.isfile() else None)
 
     def test_malformed_archive_and_metadata_hash_repository_request_tampering_fail(self):
-        for index, kind in enumerate(("malformed", "wrong-request", "wrong-source", "fake-hash", "wrong-browser-repo")):
+        for index, kind in enumerate(("malformed", "wrong-request", "wrong-source", "fake-hash",
+                                      "wrong-browser-repo", "wrong-simulator-repo", "missing-simulator")):
             with self.subTest(kind=kind):
                 shutil.rmtree(self.pages / ".preview-state", ignore_errors=True)
                 shutil.rmtree(self.pages / "status", ignore_errors=True)
