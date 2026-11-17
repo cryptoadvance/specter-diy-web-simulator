@@ -1,5 +1,5 @@
 import { validateBuildProvenance } from './build-provenance.js';
-import { getForkPreviewDetails, isIsolatedPreviewRoute } from './preview-route.js';
+import { getForkPreviewDetails, parsePreviewRoute } from './preview-route.js';
 
 const $ = selector => document.querySelector(selector);
 const siteRoot = new URL('../', import.meta.url);
@@ -81,7 +81,14 @@ const virtualHostDetails = $('#virtual-host');
 const virtualHostStatus = $('#virtual-host-status');
 const virtualHostStatusText = $('#virtual-host-status-text');
 const virtualHostPreviewNote = $('#virtual-host-preview-note');
-const isolatedPreviewRoute = isIsolatedPreviewRoute(siteRoot.pathname);
+const previewRoute = parsePreviewRoute(siteRoot.pathname);
+const isolatedPreviewRoute = previewRoute !== null;
+let publishedPreview = null;
+// Fail closed: all preview routes show a warning until provenance is verified.
+if (previewRoute) {
+  $('#fork-preview-number').textContent = `PR #${previewRoute.number} · Provenance not verified`;
+  $('#fork-preview-warning').hidden = false;
+}
 let virtualHostSocket;
 let virtualHostRetryTimer;
 let virtualHostClientId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1188,23 +1195,34 @@ function formatBuildPresentation(manifest) {
 function updateBuildMetadata(manifest) {
   const buildPresentation = formatBuildPresentation(manifest);
   const forkPreviewWarning = $('#fork-preview-warning');
-  if (forkPreviewWarning) {
+  if (forkPreviewWarning && isolatedPreviewRoute) {
     const forkPreview = getForkPreviewDetails(siteRoot.pathname,
-      buildPresentation.repository, buildPresentation.simulatorRepository, buildPresentation.commit);
-    if (forkPreview) {
-      const repositoryLink = $('#fork-preview-repository');
-      repositoryLink.href = `https://github.com/${forkPreview.repository}`;
-      repositoryLink.textContent = forkPreview.repository;
-      $('#fork-preview-number').textContent = `PR #${forkPreview.number}` +
-        (forkPreview.commitMismatch ? ' · WARNING: URL commit differs from the loaded build' : '');
-      const commitLink = $('#fork-preview-commit');
-      commitLink.href = `https://github.com/${forkPreview.repository}/commit/${forkPreview.commit}`;
-      commitLink.title = `Full source commit: ${forkPreview.commit}`;
-      commitLink.setAttribute('aria-label', `Source commit ${forkPreview.commit}`);
-      commitLink.querySelector('code').textContent = forkPreview.commit.slice(0, 12);
-      forkPreviewWarning.hidden = false;
+      buildPresentation.repository, buildPresentation.commit, publishedPreview);
+    if (forkPreview && !forkPreview.commitMismatch && !forkPreview.sourceMismatch) {
+      if (forkPreview.isFork) {
+        $('#fork-preview-title').textContent = 'UNTRUSTED PREVIEW FROM';
+        const repositoryLink = $('#fork-preview-repository');
+        repositoryLink.href = `https://github.com/${forkPreview.repository}`;
+        repositoryLink.textContent = forkPreview.repository;
+        repositoryLink.hidden = false;
+        $('#fork-preview-number').textContent = `PR #${forkPreview.number}`;
+        const commitLink = $('#fork-preview-commit');
+        commitLink.href = `https://github.com/${forkPreview.repository}/commit/${forkPreview.commit}`;
+        commitLink.title = `Full source commit: ${forkPreview.commit}`;
+        commitLink.setAttribute('aria-label', `Source commit ${forkPreview.commit}`);
+        commitLink.querySelector('code').textContent = forkPreview.commit.slice(0, 12);
+        $('#fork-preview-commit-detail').hidden = false;
+        forkPreviewWarning.hidden = false;
+      } else {
+        forkPreviewWarning.hidden = true;
+      }
     } else {
-      forkPreviewWarning.hidden = true;
+      // Missing, stale, or contradictory provenance must never hide the warning.
+      const reason = forkPreview?.commitMismatch ? 'WARNING: URL commit differs from published PR' :
+        forkPreview?.sourceMismatch ? 'WARNING: Build provenance differs from published PR' :
+        'Provenance not verified';
+      $('#fork-preview-number').textContent = `PR #${previewRoute.number} · ${reason}`;
+      forkPreviewWarning.hidden = false;
     }
   }
   const sourceCommitLink = $('#source-commit-link');
@@ -1245,6 +1263,15 @@ function updateBuildMetadata(manifest) {
 }
 
 try {
+  if (isolatedPreviewRoute) {
+    try {
+      const response = await fetch(new URL('preview-provenance.json', siteRoot), { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      publishedPreview = await response.json();
+    } catch (error) {
+      log(`Trusted PR preview provenance unavailable: ${error.message}`);
+    }
+  }
   if (params.get('virtual-host') === '1' && !embedded && !gallery) {
     virtualHostDetails.open = true;
     connectVirtualHost();
