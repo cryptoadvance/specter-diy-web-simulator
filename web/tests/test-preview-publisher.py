@@ -220,6 +220,10 @@ class PreviewPublisherTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertTrue(result["applied"])
         published_html = (preview / "index.html").read_text(encoding="utf-8")
+        self.assertEqual(json.loads((preview / "preview-provenance.json").read_text()), {
+            "schema": 1, "pr_number": 19, "base_repository": BASE,
+            "source_repository": SOURCE, "source_sha": SHA,
+        })
         self.assertIn("connect-src 'self'", published_html)
         self.assertNotIn("127.0.0.1:8788", published_html)
         self.assertNotIn("localhost:8788", published_html)
