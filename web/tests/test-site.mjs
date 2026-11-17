@@ -33,6 +33,44 @@ catch (error) {
 if (await page.locator('#fork-preview-warning').isVisible()) {
   throw new Error('The fork warning must stay hidden on the normal firmware page');
 }
+
+ // The browser must show the provenance banner on actual fork-shaped routes,
+ // including if the URL commit disagrees with the loaded manifest.
+const forkCommit = 'b'.repeat(40);
+const forkRepository = 'schnuartz-ai/specter-diy';
+const forkBuild = `builds/${forkRepository}/${forkCommit}/`;
+const forkPointer = { build: forkBuild, version: 'a'.repeat(16) };
+const forkManifest = {
+  source: { repository: forkRepository, commit: forkCommit },
+  simulator: { repository: 'cryptoadvance/specter-diy-web-simulator', commit: 'c'.repeat(40) },
+  artifact_set_sha256: 'a'.repeat(64),
+};
+for (const [urlCommit, mismatched] of [[forkCommit, false], ['d'.repeat(40), true]]) {
+  const prefix = `/pr/440/${urlCommit}/`;
+  const forkPage = await browser.newPage();
+  await forkPage.route('**/pr/440/**', async route => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.startsWith(prefix)) return route.abort();
+    const path = url.pathname.slice(prefix.length);
+    if (path === 'browser/current.json') return route.fulfill({ json: forkPointer });
+    if (path === `${forkBuild}build-info.json`) return route.fulfill({ json: forkManifest });
+    // Deliver trusted assets at the requested preview path without duplicating a build.
+    return route.fulfill({ response: await route.fetch({ url: new URL(path + url.search, base).href }) });
+  });
+  await forkPage.goto(new URL(prefix.slice(1), base).href, { waitUntil: 'domcontentloaded' });
+  await forkPage.locator('#fork-preview-warning').waitFor({ state: 'visible', timeout: 15000 });
+  const repositoryHref = await forkPage.locator('#fork-preview-repository').getAttribute('href');
+  const commitHref = await forkPage.locator('#fork-preview-commit').getAttribute('href');
+  const label = await forkPage.locator('#fork-preview-number').textContent();
+  if (repositoryHref !== `https://github.com/${forkRepository}` ||
+      commitHref !== `https://github.com/${forkRepository}/commit/${forkCommit}` ||
+      !label.includes('PR #440') ||
+      label.includes('WARNING: URL commit differs') !== mismatched) {
+    throw new Error(`Incorrect fork preview warning: ${JSON.stringify({ repositoryHref, commitHref, label })}`);
+  }
+  await forkPage.close();
+}
+
 // The under-device source link must identify the exact firmware revision,
 // including on PR preview builds that have no optional PR metadata.
 const underDevice = await page.evaluate(async () => {
